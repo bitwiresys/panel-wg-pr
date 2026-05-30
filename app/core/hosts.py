@@ -29,7 +29,7 @@ from app.nats.client import setup_nats_kv
 from app.nats.message import MessageTopic
 from app.nats.router import router
 from app.utils.logger import get_logger
-from config import runtime_settings
+from config import ROLE
 from role import Role
 
 
@@ -58,11 +58,12 @@ async def _prepare_subscription_inbound_data(
         if wg_over is None:
             wg_over = WireGuardHostOverrides()
 
-        default_allowed = ["0.0.0.0/0", "::/0"]
+        from app.utils.wireguard_subscription import DEFAULT_CLIENT_ALLOWED_IPS
+
         allowed_ips = (
             list(wg_over.allowed_ips)
             if wg_over.allowed_ips is not None and len(wg_over.allowed_ips) > 0
-            else list(default_allowed)
+            else list(DEFAULT_CLIENT_ALLOWED_IPS)
         )
 
         keepalive = None
@@ -84,7 +85,7 @@ async def _prepare_subscription_inbound_data(
             transport_config=TCPTransportConfig(path="", host=[]),
             mux_settings=None,
             wireguard_public_key=inbound_config.get("public_key", ""),
-            wireguard_pre_shared_key=inbound_config.get("pre_shared_key", None),
+            wireguard_pre_shared_key=inbound_config.get("pre_shared_key") or "",
             wireguard_local_address=inbound_config.get("address", []) or [],
             wireguard_allowed_ips=allowed_ips,
             wireguard_keepalive=keepalive,
@@ -167,7 +168,7 @@ async def _prepare_subscription_inbound_data(
     # Get VLESS encryption from inbound
     encryption = inbound_config.get("encryption", "none")
 
-    # Get flow from inbound for subscription generation.
+    # Get flow from inbound (user can override later in share.py)
     inbound_flow = inbound_config.get("flow", "")
     if inbound_flow == "none":
         inbound_flow = ""
@@ -342,6 +343,15 @@ async def _prepare_subscription_inbound_data(
             random_user_agent=host.random_user_agent,
         )
 
+    # Compute flow_enabled: only for VLESS with specific conditions
+    header_type = getattr(transport_config, "header_type", "none")
+    flow_enabled = (
+        protocol == "vless"
+        and tls_value in ("tls", "reality")
+        and network in ("tcp", "raw", "kcp")
+        and header_type != "http"
+    )
+
     return SubscriptionInboundData(
         remark=host.remark,
         inbound_tag=host.inbound_tag,
@@ -358,6 +368,7 @@ async def _prepare_subscription_inbound_data(
         encryption=encryption,
         vless_route=host.vless_route,
         inbound_flow=inbound_flow,
+        flow_enabled=flow_enabled,
         random_user_agent=host.random_user_agent,
         use_sni_as_host=host.use_sni_as_host,
         fragment_settings=host.fragment_settings.model_dump() if host.fragment_settings else None,
@@ -379,7 +390,7 @@ class HostManager:
         self._hosts = {}
         self._lock = Lock()
         self._nats_enabled = is_nats_enabled()
-        self._multi_worker = runtime_settings.role.requires_nats
+        self._multi_worker = ROLE.requires_nats
         self._nc: nats.NATS | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
@@ -423,7 +434,7 @@ class HostManager:
             # Deserialize state using JSON
             try:
                 cached_state = json.loads(value.decode("utf-8"))
-            except json.JSONDecodeError, UnicodeDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 self._logger.warning("Failed to decode HostManager state as JSON, ignoring...")
                 return False
 
@@ -436,7 +447,7 @@ class HostManager:
                         converted_state[host_id] = SubscriptionInboundData.model_validate(host_data)
                     else:
                         converted_state[host_id] = host_data
-                except ValueError, TypeError:
+                except (ValueError, TypeError):
                     self._logger.warning(f"Failed to convert host data for host ID {host_id_str}: {host_data}")
                     continue
 
@@ -626,7 +637,7 @@ host_manager: HostManager = HostManager()
 
 @on_startup
 async def initialize_hosts():
-    if runtime_settings.role == Role.NODE:
+    if ROLE == Role.NODE:
         return
     async with GetDB() as db:
         await host_manager.setup(db)
@@ -634,7 +645,7 @@ async def initialize_hosts():
 
 @on_shutdown
 async def shutdown_hosts():
-    if runtime_settings.role == Role.NODE:
+    if ROLE == Role.NODE:
         return
     # Close NATS connection
     if host_manager._nc:
