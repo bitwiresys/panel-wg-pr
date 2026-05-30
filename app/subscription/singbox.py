@@ -9,7 +9,9 @@ from app.models.subscription import (
     TLSConfig,
     WebSocketTransportConfig,
 )
+from app.templates import render_template_string
 from app.utils.helpers import UUIDEncoder
+from app.utils.wireguard_subscription import DEFAULT_CLIENT_ALLOWED_IPS
 
 from . import BaseSubscription
 
@@ -25,7 +27,7 @@ class SingBoxConfiguration(BaseSubscription):
             user_agent_template_content=user_agent_template_content,
             grpc_user_agent_template_content=grpc_user_agent_template_content,
         )
-        self.config = json.loads(singbox_template_content) if singbox_template_content else {}
+        self.config = json.loads(render_template_string(singbox_template_content))
         self.config.setdefault("endpoints", [])
         self.config.setdefault("outbounds", [])
 
@@ -58,10 +60,6 @@ class SingBoxConfiguration(BaseSubscription):
         self.config["endpoints"].append(endpoint_data)
 
     def render(self):
-        self._finalize_config()
-        return json.dumps(self.config, indent=4, cls=UUIDEncoder)
-
-    def _finalize_config(self):
         urltest_types = ["vmess", "vless", "trojan", "shadowsocks", "hysteria2", "tuic", "http", "ssh"]
         urltest_tags = [outbound["tag"] for outbound in self.config["outbounds"] if outbound["type"] in urltest_types]
         selector_types = [
@@ -87,6 +85,8 @@ class SingBoxConfiguration(BaseSubscription):
         for outbound in self.config["outbounds"]:
             if outbound.get("type") == "selector":
                 outbound["outbounds"] = selector_tags
+
+        return json.dumps(self.config, indent=4, cls=UUIDEncoder)
 
     def add(self, remark: str, address: str, inbound: SubscriptionInboundData, settings: dict):
         """Add outbound using registry pattern"""
@@ -166,13 +166,15 @@ class SingBoxConfiguration(BaseSubscription):
 
     def _transport_grpc(self, config: GRPCTransportConfig, path: str) -> dict:
         """Handle GRPC transport - only gets GRPC config"""
-        return self._normalize_and_remove_none_values({
-            "type": "grpc",
-            "service_name": path,
-            "idle_timeout": f"{config.idle_timeout}s" if config.idle_timeout else "15s",
-            "ping_timeout": f"{config.health_check_timeout}s" if config.health_check_timeout else "15s",
-            "permit_without_stream": config.permit_without_stream,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "type": "grpc",
+                "service_name": path,
+                "idle_timeout": f"{config.idle_timeout}s" if config.idle_timeout else "15s",
+                "ping_timeout": f"{config.health_check_timeout}s" if config.health_check_timeout else "15s",
+                "permit_without_stream": config.permit_without_stream,
+            }
+        )
 
     def _transport_httpupgrade(self, config: WebSocketTransportConfig, path: str) -> dict:
         """Handle HTTPUpgrade transport - only gets WS config (similar to WS)"""
@@ -272,7 +274,8 @@ class SingBoxConfiguration(BaseSubscription):
             id = self.vless_route(id, inbound.vless_route)
         user_settings = {"uuid": id}
 
-        if flow := inbound.inbound_flow:
+        # Only add flow if inbound supports it
+        if inbound.flow_enabled and (flow := settings.get("flow", "")):
             user_settings["flow"] = flow
 
         return self._build_outbound(
@@ -369,7 +372,7 @@ class SingBoxConfiguration(BaseSubscription):
             return None
 
         selected_port = self._select_port(inbound.port)
-        allowed_ips = inbound.wireguard_allowed_ips or ["0.0.0.0/0", "::/0"]
+        allowed_ips = inbound.wireguard_allowed_ips or DEFAULT_CLIENT_ALLOWED_IPS
         reserved = self._parse_wireguard_reserved(inbound.wireguard_reserved)
 
         peer = {

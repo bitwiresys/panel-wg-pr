@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from ipaddress import IPv4Network, ip_network
 
-from config import wireguard_settings
+from config import WIREGUARD_GLOBAL_POOL as WIREGUARD_GLOBAL_POOL_RAW
+from config import WIREGUARD_RESERVED as WIREGUARD_RESERVED_RAW
 
 
 def _parse_global_pool(raw: str) -> IPv4Network:
@@ -32,5 +33,5 @@ def _parse_reserved_networks(raw: str) -> frozenset[IPv4Network]:
     return frozenset(out)
 
 
-WIREGUARD_GLOBAL_POOL: IPv4Network = _parse_global_pool(wireguard_settings.global_pool)
-WIREGUARD_RESERVED: frozenset[IPv4Network] = _parse_reserved_networks(wireguard_settings.reserved)
+WIREGUARD_GLOBAL_POOL: IPv4Network = _parse_global_pool(WIREGUARD_GLOBAL_POOL_RAW)
+WIREGUARD_RESERVED: frozenset[IPv4Network] = _parse_reserved_networks(WIREGUARD_RESERVED_RAW)
