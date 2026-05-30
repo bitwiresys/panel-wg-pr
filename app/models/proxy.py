@@ -13,8 +13,15 @@ class VMessSettings(BaseModel):
     id: UUID = Field(default_factory=uuid4)
 
 
+class XTLSFlows(StrEnum):
+    NONE = ""
+    VISION = "xtls-rprx-vision"
+    VISION_UDP = "xtls-rprx-vision-udp443"
+
+
 class VlessSettings(BaseModel):
     id: UUID = Field(default_factory=uuid4)
+    flow: XTLSFlows = XTLSFlows.NONE
 
 
 class TrojanSettings(BaseModel):
@@ -68,6 +75,7 @@ class WireGuardSettings(BaseModel):
     private_key: str | None = None
     public_key: str | None = None
     peer_ips: list[str] = Field(default_factory=list)
+    pre_shared_key: str | None = None
 
     @field_validator("private_key", mode="before")
     @classmethod
