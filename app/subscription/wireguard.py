@@ -29,6 +29,7 @@ class WireGuardConfiguration(BaseSubscription):
 
         payload = components["payload"]
 
+        # Structured configuration data
         config_data = {
             "Interface": {
                 "PrivateKey": components["private_key"],
@@ -41,13 +42,18 @@ class WireGuardConfiguration(BaseSubscription):
             },
         }
 
+        # Optional Interface settings
         if mtu := payload.get("mtu"):
             config_data["Interface"]["MTU"] = str(mtu)
         if reserved := payload.get("reserved"):
             config_data["Interface"]["Reserved"] = str(reserved)
-        if dns_servers := inbound.wireguard_dns:
-            config_data["Interface"]["DNS"] = ", ".join(dns_servers)
+        if dns_servers := payload.get("dns"):
+            if isinstance(dns_servers, str):
+                config_data["Interface"]["DNS"] = dns_servers.replace(",", ", ")
+            else:
+                config_data["Interface"]["DNS"] = ", ".join(dns_servers)
 
+        # Optional Peer settings
         if preshared_key := payload.get("presharedkey"):
             config_data["Peer"]["PresharedKey"] = preshared_key
         if keepalive := payload.get("keepalive"):
