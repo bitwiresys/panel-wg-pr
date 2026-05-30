@@ -4,7 +4,6 @@ import secrets
 import warnings
 from collections import Counter
 from datetime import datetime as dt, timedelta as td, timezone as tz
-from typing import Literal
 
 from fastapi import HTTPException
 from pydantic import ValidationError
@@ -24,8 +23,6 @@ from app.db.crud.bulk import (
     update_users_proxy_settings,
 )
 from app.db.crud.user import (
-    UsersSortingOptions,
-    UsersSortingOptionsSimple,
     bulk_reset_user_data_usage,
     bulk_revoke_user_sub,
     bulk_set_owner,
@@ -34,6 +31,7 @@ from app.db.crud.user import (
     get_all_users_usages,
     get_existing_usernames,
     get_expired_users,
+    get_user_count_metric_stats,
     get_user_usages,
     get_users,
     get_users_simple,
@@ -51,7 +49,13 @@ from app.db.crud.user import (
 from app.db.models import User, UserStatus, UserTemplate
 from app.models.admin import AdminDetails
 from app.models.proxy import ProxyTable
-from app.models.stats import Period, UserUsageStatsList
+from app.models.stats import (
+    Period,
+    UserCountMetric,
+    UserCountMetricStatsList,
+    UserUsageStatsList,
+    validate_user_count_metric_scope,
+)
 from app.models.user import (
     BulkOperationDryRunResponse,
     BulkUser,
@@ -64,38 +68,44 @@ from app.models.user import (
     BulkUsersSetOwner,
     BulkWireGuardPeerIPs,
     CreateUserFromTemplate,
+    ExpiredUsersQuery,
     ModifyUserByTemplate,
     RemoveUsersResponse,
     UserCreate,
+    UserListQuery,
     UserModify,
     UsernameGenerationStrategy,
     UserNotificationResponse,
     UserResponse,
     UserSimple,
+    UserSimpleListQuery,
     UsersResponse,
     UsersSimpleResponse,
     UserSubscriptionUpdateChart,
     UserSubscriptionUpdateChartSegment,
     UserSubscriptionUpdateList,
+    UsersUsageQuery,
+    UserUsageQuery,
     WireGuardPeerIPsReallocateResponse,
 )
 from app.node.sync import remove_user as sync_remove_user, sync_user, sync_users
 from app.operation import BaseOperation, OperatorType
-from app.settings import subscription_settings
+from app.settings import hwid_settings, subscription_settings
 from app.utils.jwt import create_subscription_token
 from app.utils.logger import get_logger
 from app.utils.wireguard import (
+    build_wireguard_peer_ip_allocator,
     bulk_reallocate_wireguard_peer_ips as run_bulk_reallocate_wireguard_peer_ips,
+    get_wireguard_tags_from_groups,
     prepare_wireguard_keys_only,
     prepare_wireguard_proxy_settings,
+    prepare_wireguard_proxy_settings_with_allocator,
 )
-from config import SUBSCRIPTION_PATH
+from config import subscription_env_settings, usage_settings, wireguard_settings
 
 logger = get_logger("user-operation")
 
 _USER_AGENT_SPLIT_RE = re.compile(r"[;/\s\(\)]+")
-
-
 _VERSION_TOKEN_RE = re.compile(r"v?\d+(?:\.\d+)*", re.IGNORECASE)
 
 
@@ -120,7 +130,7 @@ class UserOperation(BaseOperation):
             else (settings.url_prefix).replace("*", salt)
         )
         token = await create_subscription_token(user.id)
-        return f"{url_prefix}/{SUBSCRIPTION_PATH}/{token}"
+        return f"{url_prefix}/{subscription_env_settings.path}/{token}"
 
     async def _generate_usernames(
         self,
@@ -230,23 +240,35 @@ class UserOperation(BaseOperation):
         if not users_to_create:
             return []
 
-        for user_to_create in users_to_create:
-            user_to_create.proxy_settings = await self._prepare_user_proxy_settings(
-                db,
-                groups,
-                user_to_create.proxy_settings,
-            )
+        wireguard_tags = await get_wireguard_tags_from_groups(groups)
+        use_shared_allocator = bool(wireguard_tags) and wireguard_settings.enabled
+
+        if use_shared_allocator:
+            allocator = await build_wireguard_peer_ip_allocator(db)
+            for user_to_create in users_to_create:
+                try:
+                    user_to_create.proxy_settings = prepare_wireguard_proxy_settings_with_allocator(
+                        user_to_create.proxy_settings,
+                        allocator,
+                    )
+                except ValueError as exc:
+                    await self.raise_error(message=str(exc), code=400, db=db)
+        else:
+            for user_to_create in users_to_create:
+                user_to_create.proxy_settings = await self._prepare_user_proxy_settings(
+                    db,
+                    groups,
+                    user_to_create.proxy_settings,
+                )
 
         db_users = await create_users_bulk(db, users_to_create, groups, db_admin)
+        await sync_users(db_users)
 
-        subscription_urls: list[str] = []
+        users_list = []
         for db_user in db_users:
-            user: UserNotificationResponse = await self.update_user(db_user)
-            asyncio.create_task(notification.create_user(user, admin))
-            logger.info(f'New user "{db_user.username}" with id "{db_user.id}" added by admin "{admin.username}"')
-            subscription_urls.append(user.subscription_url)
+            users_list.append(await self.validate_user(db_user))
 
-        return subscription_urls
+        return [user.subscription_url for user in users_list]
 
     async def validate_user(self, db_user: User, include_subscription_url: bool = True) -> UserNotificationResponse:
         user = UserNotificationResponse.model_validate(db_user)
@@ -274,17 +296,33 @@ class UserOperation(BaseOperation):
     ) -> ProxyTable:
         try:
             if skip_peer_ip_validation:
-                return await prepare_wireguard_keys_only(db, proxy_settings, groups)
-            return await prepare_wireguard_proxy_settings(
-                db,
-                proxy_settings,
-                groups,
-                exclude_user_id=exclude_user_id,
-            )
+                return await prepare_wireguard_keys_only(
+                    db,
+                    proxy_settings,
+                    groups,
+                )
+            else:
+                return await prepare_wireguard_proxy_settings(
+                    db,
+                    proxy_settings,
+                    groups,
+                    exclude_user_id=exclude_user_id,
+                )
         except ValueError as exc:
             await self.raise_error(message=str(exc), code=400, db=db)
 
     async def create_user(self, db: AsyncSession, new_user: UserCreate, admin: AdminDetails) -> UserResponse:
+        hwid_conf = await hwid_settings()
+
+        if new_user.hwid_limit is None:
+            new_user.hwid_limit = hwid_conf.fallback_limit
+
+        if new_user.hwid_limit is not None and not admin.is_sudo:
+            if new_user.hwid_limit < hwid_conf.min_limit:
+                await self.raise_error(message=f"HWID limit cannot be less than {hwid_conf.min_limit}", code=400, db=db)
+            if hwid_conf.max_limit > 0 and (new_user.hwid_limit > hwid_conf.max_limit or new_user.hwid_limit == 0):
+                await self.raise_error(message=f"HWID limit cannot exceed {hwid_conf.max_limit}", code=400, db=db)
+
         if new_user.next_plan is not None and new_user.next_plan.user_template_id is not None:
             await self.get_validated_user_template(db, new_user.next_plan.user_template_id)
 
@@ -305,17 +343,35 @@ class UserOperation(BaseOperation):
 
         return user
 
-    async def _modify_user(
+    async def _prepare_modified_user(
         self, db: AsyncSession, db_user: User, modified_user: UserModify, admin: AdminDetails
-    ) -> UserResponse:
+    ):
+        if modified_user.hwid_limit is not None and modified_user.hwid_limit > 0:
+            from app.db.crud.hwid import get_user_hwid_count
+
+            current_count = await get_user_hwid_count(db, db_user.id)
+            if current_count > modified_user.hwid_limit:
+                await self.raise_error(
+                    message=f"Cannot lower HWID limit below current device count ({current_count}). Remove devices first.",
+                    code=400,
+                    db=db,
+                )
+
+        if modified_user.hwid_limit is not None and not admin.is_sudo:
+            hwid_conf = await hwid_settings()
+            if modified_user.hwid_limit < hwid_conf.min_limit:
+                await self.raise_error(message=f"HWID limit cannot be less than {hwid_conf.min_limit}", code=400, db=db)
+            if hwid_conf.max_limit > 0 and (
+                modified_user.hwid_limit > hwid_conf.max_limit or modified_user.hwid_limit == 0
+            ):
+                await self.raise_error(message=f"HWID limit cannot exceed {hwid_conf.max_limit}", code=400, db=db)
+
         validated_groups = None
         if modified_user.group_ids:
             validated_groups = await self.validate_all_groups(db, modified_user)
 
         if modified_user.next_plan is not None and modified_user.next_plan.user_template_id is not None:
             await self.get_validated_user_template(db, modified_user.next_plan.user_template_id)
-
-        old_status = db_user.status
 
         effective_groups = validated_groups if validated_groups is not None else db_user.groups
         current_proxy_settings = ProxyTable.model_validate(db_user.proxy_settings)
@@ -340,6 +396,19 @@ class UserOperation(BaseOperation):
         if modified_user.proxy_settings is not None or prepared_proxy_settings.dict() != current_proxy_settings_data:
             modified_user.proxy_settings = prepared_proxy_settings
 
+        return validated_groups
+
+    async def _apply_modified_user(
+        self,
+        db: AsyncSession,
+        db_user: User,
+        modified_user: UserModify,
+        admin: AdminDetails,
+        *,
+        validated_groups=None,
+    ) -> UserNotificationResponse:
+        old_status = db_user.status
+
         db_user = await modify_user(db, db_user, modified_user, groups=validated_groups)
         user = await self.update_user(db_user)
 
@@ -356,9 +425,15 @@ class UserOperation(BaseOperation):
 
         return user
 
+    async def _modify_user(
+        self, db: AsyncSession, db_user: User, modified_user: UserModify, admin: AdminDetails
+    ) -> UserNotificationResponse:
+        validated_groups = await self._prepare_modified_user(db, db_user, modified_user, admin)
+        return await self._apply_modified_user(db, db_user, modified_user, admin, validated_groups=validated_groups)
+
     async def modify_user(
         self, db: AsyncSession, username: str, modified_user: UserModify, admin: AdminDetails
-    ) -> UserResponse:
+    ) -> UserNotificationResponse:
         warnings.warn(
             "modify_user(username, ...) is deprecated and will be removed in v6.0.0. "
             "Use modify_user_by_id(user_id, ...).",
@@ -377,7 +452,6 @@ class UserOperation(BaseOperation):
 
     async def _remove_user(self, db: AsyncSession, db_user: User, admin: AdminDetails) -> dict:
         user = await self.validate_user(db_user, include_subscription_url=False)
-        user_groups = list(db_user.groups)  # capture before delete
         await remove_user(db, db_user)
         await sync_remove_user(user)
 
@@ -434,8 +508,6 @@ class UserOperation(BaseOperation):
         self, db: AsyncSession, bulk_users: BulkUsersSelection, admin: AdminDetails
     ) -> RemoveUsersResponse:
         db_users = await self._get_validated_users_by_ids(db, bulk_users.ids, admin)
-        # Collect all groups before deletion
-        all_groups = {g for db_user in db_users for g in db_user.groups}
         users = [await self.validate_user(db_user, include_subscription_url=False) for db_user in db_users]
 
         await remove_users(db, db_users)
@@ -453,11 +525,15 @@ class UserOperation(BaseOperation):
         db_user: User,
         admin: AdminDetails,
         *,
+        clean_chart_data: bool | None = None,
         emit_status_change_notification: bool = True,
     ):
         old_status = db_user.status
 
-        db_user = await reset_user_data_usage(db=db, db_user=db_user)
+        if clean_chart_data is None:
+            clean_chart_data = usage_settings.reset_user_usage_clean_chart_data
+
+        db_user = await reset_user_data_usage(db=db, db_user=db_user, clean_chart_data=clean_chart_data)
         user = await self.update_user(db_user)
 
         if emit_status_change_notification and user.status != old_status:
@@ -490,7 +566,11 @@ class UserOperation(BaseOperation):
         db_users = await self._get_validated_users_by_ids(db, bulk_users.ids, admin, load_usage_logs=False)
         old_statuses = {user.id: user.status for user in db_users}
 
-        db_users = await bulk_reset_user_data_usage(db, db_users)
+        db_users = await bulk_reset_user_data_usage(
+            db,
+            db_users,
+            clean_chart_data=usage_settings.reset_user_usage_clean_chart_data,
+        )
         await sync_users(db_users)
 
         users = [await self.validate_user(db_user) for db_user in db_users]
@@ -569,14 +649,22 @@ class UserOperation(BaseOperation):
     async def reset_users_data_usage(self, db: AsyncSession, admin: AdminDetails):
         """Reset all users data usage"""
         db_admin = await self.get_validated_admin(db, admin.username)
-        await reset_all_users_data_usage(db=db, admin=db_admin)
+        await reset_all_users_data_usage(
+            db=db,
+            admin=db_admin,
+            clean_chart_data=usage_settings.reset_user_usage_clean_chart_data,
+        )
 
     async def _active_next_plan(self, db: AsyncSession, db_user: User, admin: AdminDetails) -> UserResponse:
         if db_user is None or db_user.next_plan is None:
             await self.raise_error(message="User doesn't have next plan", code=404)
 
         old_status = db_user.status
-        db_user = await reset_user_by_next(db=db, db_user=db_user)
+        db_user = await reset_user_by_next(
+            db=db,
+            db_user=db_user,
+            clean_chart_data=usage_settings.reset_user_usage_clean_chart_data,
+        )
         user = await self.update_user(db_user)
 
         if user.status != old_status:
@@ -668,11 +756,7 @@ class UserOperation(BaseOperation):
         db: AsyncSession,
         username: str,
         admin: AdminDetails,
-        start: dt = None,
-        end: dt = None,
-        period: Period = Period.hour,
-        node_id: int | None = None,
-        group_by_node: bool = False,
+        query: UserUsageQuery,
     ) -> UserUsageStatsList:
         warnings.warn(
             "get_user_usage(username, ...) is deprecated and will be removed in v6.0.0. "
@@ -681,21 +765,35 @@ class UserOperation(BaseOperation):
             stacklevel=2,
         )
         db_user = await self.get_validated_user(db, username, admin)
-        return await self._get_user_usage(db, db_user, admin, start, end, period, node_id, group_by_node)
+        return await self._get_user_usage(
+            db,
+            db_user,
+            admin,
+            query.start,
+            query.end,
+            query.period,
+            query.node_id,
+            query.group_by_node,
+        )
 
     async def get_user_usage_by_id(
         self,
         db: AsyncSession,
         user_id: int,
         admin: AdminDetails,
-        start: dt = None,
-        end: dt = None,
-        period: Period = Period.hour,
-        node_id: int | None = None,
-        group_by_node: bool = False,
+        query: UserUsageQuery,
     ) -> UserUsageStatsList:
         db_user = await self.get_validated_user_by_id(db, user_id, admin)
-        return await self._get_user_usage(db, db_user, admin, start, end, period, node_id, group_by_node)
+        return await self._get_user_usage(
+            db,
+            db_user,
+            admin,
+            query.start,
+            query.end,
+            query.period,
+            query.node_id,
+            query.group_by_node,
+        )
 
     async def get_user(self, db: AsyncSession, username: str, admin: AdminDetails) -> UserNotificationResponse:
         warnings.warn(
@@ -714,47 +812,19 @@ class UserOperation(BaseOperation):
         self,
         db: AsyncSession,
         admin: AdminDetails,
-        offset: int = None,
-        limit: int = None,
-        username: list[str] = None,
-        search: str | None = None,
-        owner: list[str] | None = None,
-        status: UserStatus | None = None,
-        sort: str | None = None,
-        proxy_id: str | None = None,
-        load_sub: bool = False,
-        group_ids: list[int] | None = None,
+        query: UserListQuery,
     ) -> UsersResponse:
         """Get all users"""
-        sort_list = []
-        if sort is not None:
-            opts = sort.strip(",").split(",")
-            for opt in opts:
-                try:
-                    enum_member = UsersSortingOptions[opt]
-                    value = enum_member.value
-                    if isinstance(value, tuple):
-                        sort_list.extend(value)
-                    else:
-                        sort_list.append(value)
-                except KeyError:
-                    await self.raise_error(message=f'"{opt}" is not a valid sort option', code=400)
+        if not admin.is_sudo:
+            query = query.model_copy(update={"owner": [admin.username], "admin_ids": None})
 
         users, count = await get_users(
             db=db,
-            offset=offset,
-            limit=limit,
-            search=search,
-            usernames=username,
-            status=status,
-            sort=sort_list,
-            proxy_id=proxy_id,
-            admins=owner if admin.is_sudo else [admin.username],
+            query=query,
             return_with_count=True,
-            group_ids=group_ids,
         )
 
-        if load_sub:
+        if query.load_sub:
             tasks = [self.generate_subscription_url(user) for user in users]
             urls = await asyncio.gather(*tasks)
 
@@ -769,23 +839,9 @@ class UserOperation(BaseOperation):
         self,
         db: AsyncSession,
         admin: AdminDetails,
-        offset: int = None,
-        limit: int = None,
-        search: str | None = None,
-        sort: str | None = None,
-        all: bool = False,
+        query: UserSimpleListQuery,
     ) -> UsersSimpleResponse:
         """Get lightweight user list with only id and username"""
-        sort_list = []
-        if sort is not None:
-            opts = sort.strip(",").split(",")
-            for opt in opts:
-                try:
-                    enum_member = UsersSortingOptionsSimple[opt]
-                    sort_list.append(enum_member)
-                except KeyError:
-                    await self.raise_error(message=f'"{opt}" is not a valid sort option', code=400)
-
         # Authorization: non-sudo admins see only their users
         admin_filter = (
             None if admin.is_sudo else await get_admin(db, admin.username, load_users=False, load_usage_logs=False)
@@ -794,12 +850,8 @@ class UserOperation(BaseOperation):
         # Call CRUD function
         rows, total = await get_users_simple(
             db=db,
-            offset=offset,
-            limit=limit,
-            search=search,
-            sort=sort_list,
+            query=query,
             admin=admin_filter,
-            skip_pagination=all,
         )
 
         # Convert tuples to Pydantic models
@@ -811,15 +863,12 @@ class UserOperation(BaseOperation):
         self,
         db: AsyncSession,
         admin: AdminDetails,
-        start: dt = None,
-        end: dt = None,
-        owner: list[str] | None = None,
-        period: Period = Period.hour,
-        node_id: int | None = None,
-        group_by_node: bool = False,
+        query: UsersUsageQuery,
     ) -> UserUsageStatsList:
         """Get all users usage"""
-        start, end = await self.validate_dates(start, end, True)
+        start, end = await self.validate_dates(query.start, query.end, True)
+        node_id = query.node_id
+        group_by_node = query.group_by_node
 
         if not admin.is_sudo:
             node_id = None
@@ -829,9 +878,41 @@ class UserOperation(BaseOperation):
             db=db,
             start=start,
             end=end,
-            period=period,
+            period=query.period,
             node_id=node_id,
-            admins=owner if admin.is_sudo else [admin.username],
+            admins=query.owner if admin.is_sudo else [admin.username],
+            group_by_node=group_by_node,
+        )
+
+    async def get_users_count_metric(
+        self,
+        db: AsyncSession,
+        admin: AdminDetails,
+        metric: UserCountMetric,
+        query: UsersUsageQuery,
+    ) -> UserCountMetricStatsList:
+        """Get one users activity/status count metric from usage rows."""
+        start, end = await self.validate_dates(query.start, query.end, True)
+        node_id = query.node_id
+        group_by_node = query.group_by_node
+
+        if not admin.is_sudo:
+            node_id = None
+            group_by_node = False
+
+        try:
+            validate_user_count_metric_scope(metric, node_id=node_id, group_by_node=group_by_node)
+        except ValueError as exc:
+            await self.raise_error(message=str(exc), code=400)
+
+        return await get_user_count_metric_stats(
+            db=db,
+            admins=query.owner if admin.is_sudo else [admin.username],
+            start=start,
+            end=end,
+            period=query.period,
+            metric=metric,
+            node_id=node_id,
             group_by_node=group_by_node,
         )
 
@@ -843,10 +924,7 @@ class UserOperation(BaseOperation):
     async def get_expired_users(
         self,
         db: AsyncSession,
-        expired_after: dt = None,
-        expired_before: dt = None,
-        admin_username: str = None,
-        target: Literal["expired", "limited"] = "expired",
+        query: ExpiredUsersQuery,
     ) -> list[str]:
         """
         Get users who have expired within the specified date range.
@@ -858,22 +936,23 @@ class UserOperation(BaseOperation):
         - If both dates are omitted, returns all users matching target.
         """
 
-        expired_after, expired_before = await self.validate_dates(expired_after, expired_before, False)
-        if admin_username:
-            admin_id = (await self.get_validated_admin(db, admin_username)).id
+        expired_after, expired_before = await self.validate_dates(query.expired_after, query.expired_before, False)
+        if query.admin_username:
+            admin_id = (await self.get_validated_admin(db, query.admin_username)).id
         else:
             admin_id = None
-        users = await get_expired_users(db, expired_after, expired_before, admin_id, target=target)
+        users = await get_expired_users(
+            db,
+            query=query.model_copy(update={"expired_after": expired_after, "expired_before": expired_before}),
+            admin_id=admin_id,
+        )
         return [row.username for row in users]
 
     async def delete_expired_users(
         self,
         db: AsyncSession,
         admin: AdminDetails,
-        expired_after: dt | None = None,
-        expired_before: dt | None = None,
-        admin_username: str = None,
-        target: Literal["expired", "limited"] = "expired",
+        query: ExpiredUsersQuery,
     ) -> RemoveUsersResponse:
         """
         Delete users who have expired within the specified date range.
@@ -884,13 +963,19 @@ class UserOperation(BaseOperation):
         - Date range filters are applied only when target is `expired`.
         """
 
-        expired_after, expired_before = await self.validate_dates(expired_after, expired_before, False)
+        expired_after, expired_before = await self.validate_dates(query.expired_after, query.expired_before, False)
 
-        if admin_username:
-            admin_id = (await self.get_validated_admin(db, admin_username)).id
+        if query.admin_username:
+            admin_id = (await self.get_validated_admin(db, query.admin_username)).id
         else:
             admin_id = None
-        username_list = await remove_expired_users(db, expired_after, expired_before, admin_id, target=target)
+        username_list = await remove_expired_users(
+            db,
+            expired_after,
+            expired_before,
+            admin_id,
+            target=query.target,
+        )
         await self.remove_users_logger(users=username_list, by=admin.username)
 
         return RemoveUsersResponse(users=username_list, count=len(username_list))
@@ -902,6 +987,7 @@ class UserOperation(BaseOperation):
             "group_ids": template.group_ids,
             "data_limit_reset_strategy": template.data_limit_reset_strategy,
             "status": template.status,
+            "hwid_limit": template.hwid_limit,
         }
 
         if template.status == UserStatus.active:
@@ -920,13 +1006,9 @@ class UserOperation(BaseOperation):
         return user_args
 
     @staticmethod
-    def apply_settings(user_args: UserCreate | UserModify, template: UserTemplate) -> dict:
+    def apply_settings(user_args: UserCreate | UserModify, template: UserTemplate) -> UserCreate | UserModify:
         if template.extra_settings:
-            flow = template.extra_settings.get("flow", None)
             method = template.extra_settings.get("method", None)
-
-            if flow is not None:
-                user_args.proxy_settings.vless.flow = flow
 
             if method is not None:
                 user_args.proxy_settings.shadowsocks.method = method
@@ -996,6 +1078,7 @@ class UserOperation(BaseOperation):
             await self.raise_error(message=error_messages, code=400)
 
         modify_user = self.apply_settings(modify_user, user_template)
+        validated_groups = await self._prepare_modified_user(db, db_user, modify_user, admin)
 
         if user_template.reset_usages:
             suppress_reset_status_change = (
@@ -1008,7 +1091,7 @@ class UserOperation(BaseOperation):
                 emit_status_change_notification=not suppress_reset_status_change,
             )
 
-        return await self._modify_user(db, db_user, modify_user, admin)
+        return await self._apply_modified_user(db, db_user, modify_user, admin, validated_groups=validated_groups)
 
     async def modify_user_with_template(
         self, db: AsyncSession, username: str, modified_template: ModifyUserByTemplate, admin: AdminDetails
@@ -1144,6 +1227,8 @@ class UserOperation(BaseOperation):
         return users_count
 
     async def bulk_modify_proxy_settings(self, db: AsyncSession, bulk_model: BulkUsersProxy):
+        if bulk_model.method is None:
+            await self.raise_error(message="No supported proxy settings were provided", code=400, db=db)
         if bulk_model.dry_run:
             n = await count_bulk_proxy_targets(db, bulk_model)
             return BulkOperationDryRunResponse(affected_users=n)

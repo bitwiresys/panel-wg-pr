@@ -4,22 +4,24 @@ import json
 from ipaddress import ip_network
 from typing import Iterable
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.manager import core_manager
 from app.db.crud.user import get_all_wireguard_peer_ips_raw
-from app.db.models import CoreConfig, CoreType, Group, ProxyInbound, User, UserStatus
-from app.db.models import inbounds_groups_association, users_groups_association
+from app.db.models import CoreConfig, CoreType, User
 from app.models.proxy import ProxyTable
 from app.node.sync import sync_users
-from app.utils.crypto import generate_wireguard_keypair, generate_wireguard_preshared_key, get_wireguard_public_key
+from app.utils.crypto import generate_wireguard_keypair, get_wireguard_public_key
 from app.utils.ip_pool import (
     WireGuardPeerIPAllocator,
     allocate_and_validate_peer_ips,
     collect_used_peer_networks_from_proxy_settings_rows,
+    get_global_used_networks,
     peer_ips_outside_global_pool,
+    validate_peer_ips_within_global_pool,
 )
+from config import wireguard_settings
 
 
 def _normalized_peer_networks(peer_ips: Iterable[str]) -> list[str]:
@@ -48,7 +50,7 @@ def _peer_network_owners_from_rows(rows: Iterable[dict]) -> dict[str, set[int]]:
 
 
 async def get_wireguard_tags(tags: Iterable[str]) -> list[str]:
-    """Get WireGuard inbound tags from a list of tags."""
+    """Get WireGuard inbound tags from a list of tags (requires core manager; unused by global pool path)."""
     inbounds_by_tag = await core_manager.get_inbounds_by_tag()
     wireguard_tags: list[str] = []
     seen: set[str] = set()
@@ -74,103 +76,17 @@ async def get_wireguard_tags_from_groups(groups: Iterable) -> list[str]:
 
 
 async def get_wireguard_inbound_tags_from_db(db: AsyncSession) -> set[str]:
-    """Collect WireGuard inbound tags from all core types.
-
-    - CoreType.wg: uses interface_name as tag.
-    - CoreType.xray: scans the inbounds array for protocol=="wireguard" entries.
-    """
-    rows = (await db.execute(select(CoreConfig))).scalars().all()
+    """Inbound tags (interface names) for all WireGuard cores."""
+    rows = (await db.execute(select(CoreConfig).where(CoreConfig.type == CoreType.wg))).scalars().all()
     tags: set[str] = set()
     for row in rows:
         cfg = row.config or {}
         if isinstance(cfg, str):
             cfg = json.loads(cfg)
-        if not isinstance(cfg, dict):
-            continue
-
-        if row.type == CoreType.wg:
-            name = cfg.get("interface_name")
-            if name:
-                tags.add(str(name).strip())
-        elif row.type == CoreType.xray:
-            for inbound in cfg.get("inbounds", []):
-                if inbound.get("protocol") == "wireguard":
-                    tag = inbound.get("tag", "").strip()
-                    if tag:
-                        tags.add(tag)
+        name = (cfg or {}).get("interface_name")
+        if name:
+            tags.add(str(name).strip())
     return tags
-
-
-async def get_wg_peer_map_from_db(db: AsyncSession, inbound_tags: set[str]) -> dict[str, list[dict]]:
-    """Build a WireGuard peer map for Xray inbound injection.
-
-    Returns {inbound_tag: [{"publicKey": "...", "allowedIPs": ["10.0.0.2/32"]}, ...]}
-    for all active/on_hold users assigned to any of the given inbound tags.
-    Only users with a non-empty public_key and at least one peer_ip are included.
-    """
-    if not inbound_tags:
-        return {}
-
-    dialect = db.bind.dialect.name
-    if dialect == "postgresql":
-        inbound_agg = func.string_agg(ProxyInbound.tag.distinct(), ",").label("inbound_tags")
-    else:
-        inbound_agg = func.group_concat(ProxyInbound.tag.distinct()).label("inbound_tags")
-
-    stmt = (
-        select(User.proxy_settings, inbound_agg)
-        .outerjoin(users_groups_association, User.id == users_groups_association.c.user_id)
-        .outerjoin(
-            Group,
-            and_(
-                users_groups_association.c.groups_id == Group.id,
-                Group.is_disabled.is_(False),
-            ),
-        )
-        .outerjoin(inbounds_groups_association, Group.id == inbounds_groups_association.c.group_id)
-        .outerjoin(
-            ProxyInbound,
-            and_(
-                inbounds_groups_association.c.inbound_id == ProxyInbound.id,
-                ProxyInbound.tag.in_(inbound_tags),
-            ),
-        )
-        .where(User.status.in_([UserStatus.active, UserStatus.on_hold]))
-        .group_by(User.id)
-    )
-
-    results = (await db.execute(stmt)).all()
-
-    peer_map: dict[str, list[dict]] = {tag: [] for tag in inbound_tags}
-
-    for row in results:
-        if not row.inbound_tags:
-            continue
-
-        proxy = row.proxy_settings or {}
-        if isinstance(proxy, str):
-            proxy = json.loads(proxy)
-
-        wg = (proxy if isinstance(proxy, dict) else {}).get("wireguard", {})
-        public_key = wg.get("public_key") if isinstance(wg, dict) else None
-        peer_ips = (wg.get("peer_ips") or []) if isinstance(wg, dict) else []
-
-        if not public_key or not peer_ips:
-            continue
-
-        pre_shared_key = wg.get("pre_shared_key") if isinstance(wg, dict) else None
-
-        user_tags = set(row.inbound_tags.split(",")) & inbound_tags
-        for tag in user_tags:
-            peer: dict = {
-                "publicKey": public_key,
-                "allowedIPs": list(peer_ips),
-            }
-            if pre_shared_key:
-                peer["preSharedKey"] = pre_shared_key
-            peer_map[tag].append(peer)
-
-    return peer_map
 
 
 async def user_in_wireguard_group(user: User, wg_tags: set[str]) -> bool:
@@ -202,6 +118,9 @@ async def prepare_wireguard_proxy_settings(
     if not wireguard_tags:
         return proxy_settings
 
+    if not wireguard_settings.enabled:
+        return proxy_settings
+
     if proxy_settings.wireguard.public_key and not proxy_settings.wireguard.private_key:
         raise ValueError("wireguard private_key is required when user is assigned to a WireGuard interface")
 
@@ -212,14 +131,64 @@ async def prepare_wireguard_proxy_settings(
     elif not proxy_settings.wireguard.public_key:
         proxy_settings.wireguard.public_key = get_wireguard_public_key(proxy_settings.wireguard.private_key)
 
-    if not proxy_settings.wireguard.pre_shared_key:
-        proxy_settings.wireguard.pre_shared_key = generate_wireguard_preshared_key()
+    if not wireguard_settings.enabled:
+        return proxy_settings
 
     peer_ips = list(proxy_settings.wireguard.peer_ips or [])
 
+    # Use merged allocate+validate function to avoid double DB scan
     peer_ips = await allocate_and_validate_peer_ips(db, peer_ips, exclude_user_id=exclude_user_id)
 
     proxy_settings.wireguard.peer_ips = peer_ips
+    return proxy_settings
+
+
+async def build_wireguard_peer_ip_allocator(
+    db: AsyncSession,
+    *,
+    exclude_user_id: int | None = None,
+) -> "WireGuardPeerIPAllocator":
+    """Build a stateful peer-IP allocator pre-loaded with all currently used peer networks.
+
+    Used by bulk-creation flows where many users need IPs allocated within a single
+    transaction; reusing one allocator avoids the duplicate-allocation bug that occurs
+    when each user independently re-reads the database before any of the new users have
+    been committed.
+    """
+    used_networks = await get_global_used_networks(db, exclude_user_id=exclude_user_id)
+    return WireGuardPeerIPAllocator(used_networks)
+
+
+def prepare_wireguard_proxy_settings_with_allocator(
+    proxy_settings: ProxyTable,
+    allocator: "WireGuardPeerIPAllocator",
+) -> ProxyTable:
+    """Prepare WireGuard settings for a single user against a shared allocator.
+
+    Caller is responsible for confirming the user belongs to a WireGuard group and that
+    `wireguard_settings.enabled` is true. Validates any user-supplied peer_ips against
+    the allocator's current blocked set, then either reserves them or allocates a fresh
+    IP. The allocator is mutated to reflect the new reservation.
+    """
+    prepare_wireguard_keys_for_member(proxy_settings)
+
+    peer_ips = list(proxy_settings.wireguard.peer_ips or [])
+
+    if peer_ips:
+        validate_peer_ips_within_global_pool(peer_ips)
+        for peer_ip in peer_ips:
+            if allocator.is_reserved(peer_ip):
+                raise ValueError(f"peer IP '{peer_ip}' is reserved")
+            if allocator.conflicts(peer_ip):
+                raise ValueError(f"peer IP/network '{peer_ip}' is already in use by an existing user's peer network")
+            allocator.reserve(peer_ip)
+        proxy_settings.wireguard.peer_ips = peer_ips
+        return proxy_settings
+
+    candidate = allocator.allocate()
+    if candidate is None:
+        raise ValueError("unable to allocate wireguard peer IP")
+    proxy_settings.wireguard.peer_ips = [candidate]
     return proxy_settings
 
 
@@ -247,9 +216,6 @@ async def prepare_wireguard_keys_only(
     elif not proxy_settings.wireguard.public_key:
         proxy_settings.wireguard.public_key = get_wireguard_public_key(proxy_settings.wireguard.private_key)
 
-    if not proxy_settings.wireguard.pre_shared_key:
-        proxy_settings.wireguard.pre_shared_key = generate_wireguard_preshared_key()
-
     return proxy_settings
 
 
@@ -264,9 +230,6 @@ def prepare_wireguard_keys_for_member(proxy_settings: ProxyTable) -> ProxyTable:
         proxy_settings.wireguard.public_key = public_key
     elif not proxy_settings.wireguard.public_key:
         proxy_settings.wireguard.public_key = get_wireguard_public_key(proxy_settings.wireguard.private_key)
-
-    if not proxy_settings.wireguard.pre_shared_key:
-        proxy_settings.wireguard.pre_shared_key = generate_wireguard_preshared_key()
 
     return proxy_settings
 
@@ -284,6 +247,16 @@ async def bulk_reallocate_wireguard_peer_ips(
 
     ``target_users`` should be the users allowed by bulk scope (group/admin/user filters).
     """
+    if not wireguard_settings.enabled:
+        return {
+            "wireguard_inbound_tags": 0,
+            "candidates": 0,
+            "updated": 0,
+            "dry_run": dry_run,
+            "sample_usernames": [],
+            "affected_users": 0,
+        }
+
     wg_tags = await get_wireguard_inbound_tags_from_db(db)
     if not wg_tags:
         return {
