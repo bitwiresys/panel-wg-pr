@@ -1,5 +1,6 @@
 import base64
 import binascii
+import os
 
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
@@ -25,37 +26,20 @@ def add_base64_padding(b64_string: str) -> str:
 
 
 def get_x25519_public_key(private_key_b64: str) -> str:
-    """
-    Converts an X25519 private key (URL-safe Base64) into a public key (URL-safe Base64 format).
-
-    :param private_key_b64: The private key in URL-safe Base64 format (without padding).
-    :return: The corresponding public key as a URL-safe Base64 string (without padding).
-    """
+    """Convert an X25519 private key (URL-safe Base64) to the corresponding public key."""
     try:
-        # Decode Base64 (URL-safe) Add padding if needed
         private_key_bytes = base64.urlsafe_b64decode(add_base64_padding(private_key_b64))
 
-        # Ensure the private key is 32 bytes
         if len(private_key_bytes) != 32:
             raise ValueError("Invalid private key length. Must be 32 bytes after decoding.")
 
-        # Load the private key
         private_key = x25519.X25519PrivateKey.from_private_bytes(private_key_bytes)
-
-        # Derive the public key
-        public_key = private_key.public_key()
-
-        # Convert the public key to bytes
-        public_key_bytes = public_key.public_bytes(
+        public_key_bytes = private_key.public_key().public_bytes(
             encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
         )
+        return base64.urlsafe_b64encode(public_key_bytes).decode().rstrip("=")
 
-        # Encode the public key as URL-safe Base64 (without padding)
-        public_key_b64 = base64.urlsafe_b64encode(public_key_bytes).decode().rstrip("=")
-
-        return public_key_b64
-
-    except ValueError, binascii.Error:
+    except (ValueError, binascii.Error):
         raise ValueError("Invalid private key.")
 
 
@@ -80,6 +64,11 @@ def get_wireguard_public_key(private_key_b64: str) -> str:
         format=serialization.PublicFormat.Raw,
     )
     return base64.b64encode(public_key_bytes).decode("ascii")
+
+
+def generate_wireguard_preshared_key() -> str:
+    """Generate a random 32-byte WireGuard pre-shared key (Base64-encoded)."""
+    return base64.b64encode(os.urandom(32)).decode("ascii")
 
 
 def generate_wireguard_keypair() -> tuple[str, str]:

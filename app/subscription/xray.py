@@ -11,7 +11,9 @@ from app.models.subscription import (
     WebSocketTransportConfig,
     XHTTPTransportConfig,
 )
+from app.templates import render_template_string
 from app.utils.helpers import UUIDEncoder
+from app.utils.wireguard_subscription import DEFAULT_CLIENT_ALLOWED_IPS
 
 from . import BaseSubscription
 
@@ -28,7 +30,7 @@ class XrayConfiguration(BaseSubscription):
             grpc_user_agent_template_content=grpc_user_agent_template_content,
         )
         self.config = []
-        self.template = json.loads(xray_template_content) if xray_template_content else {}
+        self.template = render_template_string(xray_template_content)
 
         # Registry for transport handlers
         self.transport_handlers = {
@@ -56,7 +58,8 @@ class XrayConfiguration(BaseSubscription):
         }
 
     def add_config(self, remarks, outbounds, template_content: str | None = None):
-        json_template = json.loads(template_content) if template_content is not None else self.template.copy()
+        rendered_template = render_template_string(template_content) if template_content is not None else self.template
+        json_template = json.loads(rendered_template)
         json_template["remarks"] = remarks
         json_template["outbounds"] = outbounds + json_template["outbounds"]
         self.config.append(json_template)
@@ -274,23 +277,27 @@ class XrayConfiguration(BaseSubscription):
         """Handle QUIC transport - only gets QUIC config"""
         host = config.host if isinstance(config.host, str) else (config.host[0] if config.host else "")
 
-        return self._normalize_and_remove_none_values({
-            "security": host,
-            "header": {"type": config.header_type},
-            "key": path,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "security": host,
+                "header": {"type": config.header_type},
+                "key": path,
+            }
+        )
 
     def _transport_kcp(self, config: KCPTransportConfig, path: str) -> dict:
         """Handle KCP transport - only gets KCP config"""
-        return self._normalize_and_remove_none_values({
-            "mtu": config.mtu if config.mtu is not None else 1350,
-            "tti": config.tti if config.tti is not None else 50,
-            "uplinkCapacity": config.uplink_capacity if config.uplink_capacity is not None else 5,
-            "downlinkCapacity": config.downlink_capacity if config.downlink_capacity is not None else 20,
-            "congestion": config.congestion,
-            "readBufferSize": config.read_buffer_size if config.read_buffer_size is not None else 2,
-            "writeBufferSize": config.write_buffer_size if config.write_buffer_size is not None else 2,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "mtu": config.mtu if config.mtu is not None else 1350,
+                "tti": config.tti if config.tti is not None else 50,
+                "uplinkCapacity": config.uplink_capacity if config.uplink_capacity is not None else 5,
+                "downlinkCapacity": config.downlink_capacity if config.downlink_capacity is not None else 20,
+                "congestion": config.congestion,
+                "readBufferSize": config.read_buffer_size if config.read_buffer_size is not None else 2,
+                "writeBufferSize": config.write_buffer_size if config.write_buffer_size is not None else 2,
+            }
+        )
 
     def _apply_transport(self, network: str, inbound: SubscriptionInboundData, path: str) -> dict | None:
         """Apply transport settings using registry pattern"""
@@ -306,15 +313,17 @@ class XrayConfiguration(BaseSubscription):
         sni = tls_config.sni if isinstance(tls_config.sni, str) else (tls_config.sni[0] if tls_config.sni else None)
 
         if security == "reality":
-            return self._normalize_and_remove_none_values({
-                "serverName": sni,
-                "fingerprint": tls_config.fingerprint,
-                "show": False,
-                "publicKey": tls_config.reality_public_key,
-                "shortId": tls_config.reality_short_id,
-                "spiderX": tls_config.reality_spx,
-                "mldsa65Verify": tls_config.mldsa65_verify,
-            })
+            return self._normalize_and_remove_none_values(
+                {
+                    "serverName": sni,
+                    "fingerprint": tls_config.fingerprint,
+                    "show": False,
+                    "publicKey": tls_config.reality_public_key,
+                    "shortId": tls_config.reality_short_id,
+                    "spiderX": tls_config.reality_spx,
+                    "mldsa65Verify": tls_config.mldsa65_verify,
+                }
+            )
         else:  # tls
             config = {
                 "serverName": sni,
@@ -383,11 +392,13 @@ class XrayConfiguration(BaseSubscription):
             sockopt=sockopt,
         )
 
-        return self._normalize_and_remove_none_values({
-            "address": download_settings.address,
-            "port": self._select_port(download_settings.port),
-            **stream_settings,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "address": download_settings.address,
+                "port": self._select_port(download_settings.port),
+                **stream_settings,
+            }
+        )
 
     # ========== Protocol Builders (Registry Methods) ==========
 
@@ -409,7 +420,8 @@ class XrayConfiguration(BaseSubscription):
 
         user_settings = {"id": id, "encryption": inbound.encryption}
 
-        if flow := inbound.inbound_flow:
+        # Only add flow if inbound supports it
+        if inbound.flow_enabled and (flow := settings.get("flow", "")):
             user_settings["flow"] = flow
 
         return self._build_outbound(
@@ -482,7 +494,7 @@ class XrayConfiguration(BaseSubscription):
         peer = {
             "endpoint": f"{address}:{self._select_port(inbound.port)}",
             "publicKey": public_key,
-            "allowedIPs": inbound.wireguard_allowed_ips or ["0.0.0.0/0", "::/0"],
+            "allowedIPs": inbound.wireguard_allowed_ips or DEFAULT_CLIENT_ALLOWED_IPS,
             "keepAlive": inbound.wireguard_keepalive,
             "preSharedKey": inbound.wireguard_pre_shared_key or None,
         }

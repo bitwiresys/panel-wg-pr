@@ -1,6 +1,6 @@
 'use client'
 
-import BulkFlow from '@/features/bulk/components/bulk-flow'
+import BulkFlow from '@/components/bulk/bulk-flow'
 
 export default function BulkWireguardPage() {
   return <BulkFlow operationType="wireguard" />
