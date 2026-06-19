@@ -3,9 +3,8 @@
 #
 #   docker pull registry.gitlab.com/itentis1/siriusvpn/develop/pasarguard/panel:latest
 #
-# Zero extra setup required — $CI_REGISTRY*, $CI_JOB_TOKEN are provided by GitLab.
-# To also mirror to Docker Hub, define masked CI/CD variables DOCKERHUB_USER and
-# DOCKERHUB_TOKEN and uncomment the marked lines below.
+# Requires the project's Container Registry to be enabled. $CI_REGISTRY*,
+# $CI_JOB_TOKEN are provided by GitLab.
 
 stages:
   - build
@@ -13,8 +12,6 @@ stages:
 variables:
   # Image repository under this project's registry -> .../pasarguard/panel
   IMAGE: "$CI_REGISTRY_IMAGE/panel"
-  # Set to "linux/amd64,linux/arm64" for a multi-arch manifest (slower).
-  PLATFORMS: "linux/amd64"
   DOCKERFILE: "Dockerfile.ci"
 
 build:image:
@@ -23,29 +20,20 @@ build:image:
   services:
     - docker:27-dind
   variables:
+    # Connect the docker client to the dind service over TLS.
+    DOCKER_HOST: "tcp://docker:2376"
     DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_BUILDKIT: "1"
   rules:
-    - if: '$CI_COMMIT_TAG'                          # build on git tags -> :<tag> + :latest
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH' # build on default branch (main) -> :latest
-    - if: '$CI_PIPELINE_SOURCE == "web"'            # allow manual run from the UI
+    - if: '$CI_COMMIT_TAG'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
   before_script:
+    - docker info
     - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
-    # - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin   # Docker Hub mirror
-    - docker run --rm --privileged tonistiigi/binfmt --install all >/dev/null 2>&1 || true
-    - docker buildx create --use --name ci-builder >/dev/null 2>&1 || docker buildx use ci-builder
   script:
-    - |
-      set -e
-      TAGS="-t $IMAGE:$CI_COMMIT_SHORT_SHA"
-      if [ -n "$CI_COMMIT_TAG" ]; then
-        TAGS="$TAGS -t $IMAGE:$CI_COMMIT_TAG -t $IMAGE:latest"
-      else
-        TAGS="$TAGS -t $IMAGE:latest"
-      fi
-      docker buildx build \
-        --platform "$PLATFORMS" \
-        -f "$DOCKERFILE" \
-        $TAGS \
-        --cache-from "type=registry,ref=$IMAGE:buildcache" \
-        --cache-to   "type=registry,ref=$IMAGE:buildcache,mode=max" \
-        --push .
+    - docker build -f "$DOCKERFILE" -t "$IMAGE:$CI_COMMIT_SHORT_SHA" -t "$IMAGE:latest" .
+    - docker push "$IMAGE:$CI_COMMIT_SHORT_SHA"
+    - docker push "$IMAGE:latest"
