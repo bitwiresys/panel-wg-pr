@@ -11,7 +11,6 @@ from app import notification
 from app.core.manager import core_manager
 from app.db import AsyncSession
 from app.db.crud.node import (
-    NodeSortingOptionsSimple,
     bulk_update_node_status,
     clear_usage_data,
     create_node,
@@ -37,6 +36,7 @@ from app.models.node import (
     NodeNotification,
     NodeResponse,
     NodeSimple,
+    NodeSimpleSortOption,
     NodesResponse,
     NodesSimpleResponse,
     UsageTable,
@@ -133,7 +133,7 @@ class NodeOperation(BaseOperation):
             opts = sort.strip(",").split(",")
             for opt in opts:
                 try:
-                    enum_member = NodeSortingOptionsSimple[opt]
+                    enum_member = NodeSimpleSortOption[opt]
                     sort_list.append(enum_member)
                 except KeyError:
                     await self.raise_error(message=f'"{opt}" is not a valid sort option', code=400)
