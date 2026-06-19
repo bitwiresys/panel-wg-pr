@@ -8,7 +8,7 @@ from typing import Union
 
 import commentjson
 
-from app.models.core import CoreType
+from app.db.models import CoreType
 from app.models.protocol import ProxyProtocol
 from app.utils.crypto import get_wireguard_public_key, validate_wireguard_key
 

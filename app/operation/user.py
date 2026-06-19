@@ -24,8 +24,6 @@ from app.db.crud.bulk import (
     update_users_proxy_settings,
 )
 from app.db.crud.user import (
-    UsersSortingOptions,
-    UsersSortingOptionsSimple,
     bulk_reset_user_data_usage,
     bulk_revoke_user_sub,
     bulk_set_owner,
@@ -72,6 +70,8 @@ from app.models.user import (
     UserNotificationResponse,
     UserResponse,
     UserSimple,
+    UserSimpleSortOption,
+    UserSortOption,
     UsersResponse,
     UsersSimpleResponse,
     UserSubscriptionUpdateChart,
@@ -731,7 +731,7 @@ class UserOperation(BaseOperation):
             opts = sort.strip(",").split(",")
             for opt in opts:
                 try:
-                    enum_member = UsersSortingOptions[opt]
+                    enum_member = UserSortOption[opt]
                     value = enum_member.value
                     if isinstance(value, tuple):
                         sort_list.extend(value)
@@ -781,7 +781,7 @@ class UserOperation(BaseOperation):
             opts = sort.strip(",").split(",")
             for opt in opts:
                 try:
-                    enum_member = UsersSortingOptionsSimple[opt]
+                    enum_member = UserSimpleSortOption[opt]
                     sort_list.append(enum_member)
                 except KeyError:
                     await self.raise_error(message=f'"{opt}" is not a valid sort option', code=400)

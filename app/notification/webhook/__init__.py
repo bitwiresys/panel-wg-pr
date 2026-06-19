@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 
 from app.settings import webhook_settings
 from app.models.admin import AdminDetails
-from app.models.user import UserNotificationResponse, UserStatus
+from app.db.models import UserStatus
+from app.models.user import UserNotificationResponse
 from app.notification.queue_manager import enqueue_webhook
 
 

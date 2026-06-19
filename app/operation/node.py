@@ -25,9 +25,8 @@ from app.db.crud.node import (
     update_node_status,
 )
 from app.db.crud.user import get_user, get_users_count_by_status
-from app.db.models import Node, NodeStatus, UserStatus
+from app.db.models import CoreType, Node, NodeStatus, UserStatus
 from app.models.admin import AdminDetails
-from app.models.core import CoreType
 from app.models.node import (
     NodeCoreUpdate,
     NodeCreate,

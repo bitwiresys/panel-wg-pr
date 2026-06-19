@@ -5,7 +5,8 @@ from aiogram.types import CopyTextButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.filters.callback_data import CallbackData
 
-from app.models.user import UserResponse, UserStatus
+from app.db.models import UserStatus
+from app.models.user import UserResponse
 from app.models.user_template import UserTemplate
 from app.telegram.utils.texts import Button as Texts
 from .base import CancelAction, CancelKeyboard

@@ -8,7 +8,7 @@ from typing import Union
 
 import commentjson
 
-from app.models.core import CoreType
+from app.db.models import CoreType
 from app.utils.crypto import get_cert_SANs, get_wireguard_public_key, get_x25519_public_key
 
 
