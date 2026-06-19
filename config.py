@@ -216,9 +216,11 @@ job_settings = JobSettings()
 feature_settings = FeatureSettings()
 wireguard_settings = WireGuardSettings()
 
-# Top-level aliases consumed by app/utils/wireguard_pool.py
+# Top-level aliases consumed by various app modules
 WIREGUARD_GLOBAL_POOL = wireguard_settings.global_pool
 WIREGUARD_RESERVED = wireguard_settings.reserved
+ROLE = runtime_settings.role
+SUBSCRIPTION_PATH = subscription_env_settings.fallback_path
 
 if not database_settings.is_postgresql:
     usage_settings.enable_recording_nodes_stats = False
