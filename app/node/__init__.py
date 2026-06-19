@@ -30,9 +30,13 @@ class NodeManager:
         except Exception:
             pass
 
-    async def update_node(self, node: Node) -> PasarGuardNode:
+    async def update_node(self, node: Node, max_message_size: int | None = None) -> PasarGuardNode:
         async with self._lock.writer_lock:
             old_node: PasarGuardNode | None = self._nodes.pop(node.id, None)
+
+            extra_kwargs = {}
+            if max_message_size is not None:
+                extra_kwargs["max_message_size"] = max_message_size
 
             new_node = create_node(
                 connection=type_map[node.connection_type],
@@ -47,6 +51,7 @@ class NodeManager:
                 internal_timeout=node.internal_timeout,
                 proxy=node.proxy_url,
                 extra={"id": node.id, "usage_coefficient": node.usage_coefficient},
+                **extra_kwargs,
             )
 
             self._nodes[node.id] = new_node
@@ -123,4 +128,11 @@ class NodeManager:
 node_manager: NodeManager = NodeManager()
 
 
-__all__ = ["core_users", "node_manager"]
+def calculate_max_message_size(user_count: int) -> int:
+    """Return gRPC max message size (bytes) scaled to the number of users."""
+    per_user = 4096  # ~4 KB per protobuf User message
+    minimum = 64 * 1024 * 1024  # 64 MB floor
+    return max(minimum, user_count * per_user)
+
+
+__all__ = ["calculate_max_message_size", "core_users", "node_manager"]
