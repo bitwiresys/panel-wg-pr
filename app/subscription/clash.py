@@ -13,7 +13,6 @@ from app.models.subscription import (
 )
 from app.templates import render_template_string
 from app.utils.helpers import yml_uuid_representer
-from app.utils.wireguard_subscription import DEFAULT_CLIENT_ALLOWED_IPS
 
 from . import BaseSubscription
 
@@ -433,8 +432,7 @@ class ClashMetaConfiguration(ClashConfiguration):
         if inbound.encryption != "none":
             node["encryption"] = inbound.encryption
 
-        # Only add flow if inbound supports it
-        if inbound.flow_enabled and (flow := settings.get("flow", "")):
+        if flow := inbound.inbound_flow:
             node["flow"] = flow
 
         self._apply_tls(node, inbound.tls_config, "vless")
@@ -523,7 +521,7 @@ class ClashMetaConfiguration(ClashConfiguration):
             "ipv6": ipv6,
             "private-key": private_key,
             "public-key": public_key,
-            "allowed-ips": inbound.wireguard_allowed_ips or DEFAULT_CLIENT_ALLOWED_IPS,
+            "allowed-ips": inbound.wireguard_allowed_ips or ["0.0.0.0/0", "::/0"],
             "pre-shared-key": inbound.wireguard_pre_shared_key or None,
             "reserved": self._parse_wireguard_reserved(inbound.wireguard_reserved),
             "mtu": inbound.wireguard_mtu,
