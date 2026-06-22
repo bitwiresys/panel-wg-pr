@@ -221,6 +221,7 @@ WIREGUARD_GLOBAL_POOL = wireguard_settings.global_pool
 WIREGUARD_RESERVED = wireguard_settings.reserved
 ROLE = runtime_settings.role
 SUBSCRIPTION_PATH = subscription_env_settings.fallback_path
+SUDOERS = auth_settings.sudoers
 
 if not database_settings.is_postgresql:
     usage_settings.enable_recording_nodes_stats = False
