@@ -45,6 +45,7 @@ from app.models.user import (
     UserSortField,
     UserSortOption,
 )
+from app.models.validators import MAX_ON_HOLD_EXPIRE_DURATION_SECONDS
 from config import user_cleanup_settings
 
 from .general import (
@@ -61,9 +62,16 @@ _SUBSCRIPTION_UPDATE_IP_MAX_LEN = UserSubscriptionUpdate.__table__.columns.ip.ty
 _ONLINE_USERS_WINDOW = timedelta(minutes=2)
 
 
+def _safe_on_hold_expire_duration(duration: int | None) -> int | None:
+    if duration is None or duration <= 0:
+        return None
+    return min(duration, MAX_ON_HOLD_EXPIRE_DURATION_SECONDS)
+
+
 def _build_user_select_stmt(
     *,
     load_admin: bool = True,
+    load_admin_role: bool = False,
     load_next_plan: bool = True,
     load_usage_logs: bool = True,
     load_groups: bool = True,
@@ -72,7 +80,10 @@ def _build_user_select_stmt(
     stmt = select(User)
     options = []
     if load_admin:
-        options.append(joinedload(User.admin))
+        admin_loader = joinedload(User.admin)
+        if load_admin_role:
+            admin_loader = admin_loader.selectinload(Admin.role)
+        options.append(admin_loader)
     if load_next_plan:
         options.append(joinedload(User.next_plan))
     if load_usage_logs:
@@ -88,12 +99,15 @@ async def load_user_attrs(
     user: User,
     *,
     load_admin: bool = True,
+    load_admin_role: bool = False,
     load_next_plan: bool = True,
     load_usage_logs: bool = True,
     load_groups: bool = True,
 ):
     if load_admin:
         await user.awaitable_attrs.admin
+        if load_admin_role and user.admin is not None:
+            await user.admin.awaitable_attrs.role
     if load_next_plan:
         await user.awaitable_attrs.next_plan
     if load_usage_logs:
@@ -107,6 +121,7 @@ async def refresh_and_load_user(
     user: User,
     *,
     load_admin: bool = True,
+    load_admin_role: bool = False,
     load_next_plan: bool = True,
     load_usage_logs: bool = True,
     load_groups: bool = True,
@@ -115,6 +130,7 @@ async def refresh_and_load_user(
     await load_user_attrs(
         user,
         load_admin=load_admin,
+        load_admin_role=load_admin_role,
         load_next_plan=load_next_plan,
         load_usage_logs=load_usage_logs,
         load_groups=load_groups,
@@ -126,9 +142,11 @@ async def get_user(
     username: str,
     *,
     load_admin: bool = True,
+    load_admin_role: bool = False,
     load_next_plan: bool = True,
     load_usage_logs: bool = True,
     load_groups: bool = True,
+    admin_id: int | None = None,
 ) -> Optional[User]:
     """
     Retrieves a user by username.
@@ -136,16 +154,21 @@ async def get_user(
     Args:
         db (AsyncSession): Database session.
         username (str): The username of the user.
+        admin_id: If provided, only return the user if they belong to this admin.
 
     Returns:
         Optional[User]: The user object if found, else None.
     """
     stmt = _build_user_select_stmt(
         load_admin=load_admin,
+        load_admin_role=load_admin_role,
         load_next_plan=load_next_plan,
         load_usage_logs=load_usage_logs,
         load_groups=load_groups,
     ).where(User.username == username)
+
+    if admin_id is not None:
+        stmt = stmt.where(User.admin_id == admin_id)
 
     return (await db.execute(stmt)).unique().scalar_one_or_none()
 
@@ -155,9 +178,11 @@ async def get_user_by_id(
     user_id: int,
     *,
     load_admin: bool = True,
+    load_admin_role: bool = False,
     load_next_plan: bool = True,
     load_usage_logs: bool = True,
     load_groups: bool = True,
+    admin_id: int | None = None,
 ) -> User | None:
     """
     Retrieves a user by user ID.
@@ -165,16 +190,21 @@ async def get_user_by_id(
     Args:
         db (AsyncSession): Database session.
         user_id (int): The ID of the user.
+        admin_id: If provided, only return the user if they belong to this admin.
 
     Returns:
         Optional[User]: The user object if found, else None.
     """
     stmt = _build_user_select_stmt(
         load_admin=load_admin,
+        load_admin_role=load_admin_role,
         load_next_plan=load_next_plan,
         load_usage_logs=load_usage_logs,
         load_groups=load_groups,
     ).where(User.id == user_id)
+
+    if admin_id is not None:
+        stmt = stmt.where(User.admin_id == admin_id)
 
     return (await db.execute(stmt)).unique().scalar_one_or_none()
 
@@ -287,6 +317,7 @@ async def get_users(
     query: UserListQuery,
     admin: Admin | None = None,
     return_with_count: bool = False,
+    load_admin_role: bool = False,
 ) -> list[User] | tuple[list[User], int]:
     """
     Retrieves users based on various filters.
@@ -300,8 +331,12 @@ async def get_users(
     Returns:
         List of users or tuple with (users, count) if return_with_count is True.
     """
+    admin_loader = selectinload(User.admin)
+    if load_admin_role:
+        admin_loader = admin_loader.selectinload(Admin.role)
+
     stmt = select(User).options(
-        selectinload(User.admin),
+        admin_loader,
         selectinload(User.next_plan),
         selectinload(User.usage_logs),
         selectinload(User.groups),
@@ -410,7 +445,7 @@ async def get_users_simple(
     Args:
         db: Database session.
         query: Structured lightweight user list filters.
-        admin: Admin filter (for non-sudo authorization).
+        admin: Admin filter (for scope-based authorization).
 
     Returns:
         Tuple of (list of (id, username) tuples, total_count).
@@ -476,17 +511,12 @@ def _cleanup_target_user_conditions(
     expired_before: datetime | None = None,
     admin_id: int | None = None,
     target: Literal["expired", "limited"] = "expired",
-    now: datetime | None = None,
 ):
     if target == "limited":
-        conditions = [User.status == UserStatus.limited, User.is_limited]
+        conditions = [User.is_limited]
     else:
         # Time-expired users support expiration date range filtering.
-        conditions = [
-            User.status == UserStatus.expired,
-            User.expire.isnot(None),
-            User.expire <= now if now is not None else User.is_expired,
-        ]
+        conditions = [User.is_expired]
         if expired_after:
             conditions.append(User.expire >= expired_after)
         if expired_before:
@@ -505,8 +535,7 @@ async def remove_expired_users(
     admin_id: int | None = None,
     target: Literal["expired", "limited"] = "expired",
 ) -> list[str]:
-    now = datetime.now(timezone.utc) if target == "expired" else None
-    conditions = _cleanup_target_user_conditions(expired_after, expired_before, admin_id, target, now)
+    conditions = _cleanup_target_user_conditions(expired_after, expired_before, admin_id, target)
 
     rows = (await db.execute(select(User.id, User.username).where(*conditions))).all()
     if not rows:
@@ -711,6 +740,62 @@ async def get_user_usages(
     return UserUsageStatsList(period=period, start=start, end=end, stats=stats)
 
 
+async def get_users_count_by_admin(db: AsyncSession, admin_id: int | None) -> int:
+    """
+    Gets the total count of users belonging to a specific admin.
+
+    Args:
+        db (AsyncSession): Database session.
+        admin_id (int | None): Admin ID to filter by. If None, counts all users.
+
+    Returns:
+        int: Total count of users for the given admin.
+    """
+    stmt = select(func.count(User.id))
+    if admin_id is not None:
+        stmt = stmt.where(User.admin_id == admin_id)
+    return (await db.execute(stmt)).scalar_one() or 0
+
+
+async def lock_admin_quota_row(db: AsyncSession, admin_id: int) -> None:
+    """Lock an admin row before quota-sensitive user creation."""
+    if db.bind.dialect.name == "sqlite":
+        await db.execute(update(Admin).where(Admin.id == admin_id).values(id=Admin.id))
+        return
+
+    await db.execute(select(Admin.id).where(Admin.id == admin_id).with_for_update())
+
+
+async def get_users_by_usernames(
+    db: AsyncSession,
+    usernames: Sequence[str],
+    *,
+    load_admin_role: bool = False,
+) -> list[User]:
+    if not usernames:
+        return []
+
+    result = await db.execute(
+        _build_user_select_stmt(load_admin_role=load_admin_role).where(User.username.in_(usernames))
+    )
+    users_by_username = {user.username: user for user in result.unique().scalars().all()}
+    return [users_by_username[username] for username in usernames if username in users_by_username]
+
+
+async def get_users_by_ids(
+    db: AsyncSession,
+    user_ids: Sequence[int],
+    *,
+    load_admin_role: bool = False,
+) -> list[User]:
+    if not user_ids:
+        return []
+
+    result = await db.execute(_build_user_select_stmt(load_admin_role=load_admin_role).where(User.id.in_(user_ids)))
+    users_by_id = {user.id: user for user in result.unique().scalars().all()}
+    return [users_by_id[user_id] for user_id in user_ids if user_id in users_by_id]
+
+
 async def get_users_count(db: AsyncSession, status: UserStatus = None, admin_id: int = None) -> int:
     """
     Gets the total count of users with optional filters.
@@ -770,7 +855,9 @@ async def get_users_count_by_status(
     return all_statuses
 
 
-async def create_user(db: AsyncSession, new_user: UserCreate, groups: list[Group], admin: Admin) -> User:
+async def create_user(
+    db: AsyncSession, new_user: UserCreate, groups: list[Group], admin: Admin, *, commit: bool = True
+) -> User:
     """
     Creates a new user.
 
@@ -802,13 +889,14 @@ async def create_user(db: AsyncSession, new_user: UserCreate, groups: list[Group
     if new_user.next_plan:
         db_user.next_plan = NextPlan(user_id=db_user.id, **new_user.next_plan.model_dump())
         db.add(db_user.next_plan)
-    await db.commit()
-    await refresh_and_load_user(db, db_user)
+    if commit:
+        await db.commit()
+        await refresh_and_load_user(db, db_user)
     return db_user
 
 
 async def create_users_bulk(
-    db: AsyncSession, new_users: list[UserCreate], groups: list[Group], admin: Admin
+    db: AsyncSession, new_users: list[UserCreate], groups: list[Group], admin: Admin, *, commit: bool = True
 ) -> list[User]:
     """
     Creates multiple users in a single commit for better performance.
@@ -841,10 +929,10 @@ async def create_users_bulk(
         db.add_all(next_plans)
         await db.flush()
 
-    await db.commit()
-
-    for user in db_users:
-        await refresh_and_load_user(db, user)
+    if commit:
+        await db.commit()
+        for user in db_users:
+            await refresh_and_load_user(db, user)
 
     return db_users
 
@@ -898,6 +986,7 @@ async def modify_user(
     modify: UserModify,
     *,
     groups: list[Group] | None = None,
+    commit: bool = True,
 ) -> User:
     """
     Modify a user's information.
@@ -992,8 +1081,9 @@ async def modify_user(
     if remove_expiration_reminder:
         await delete_user_passed_notification_reminders(db, id, ReminderType.expiration_date, days_left)
 
-    await db.commit()
-    await refresh_and_load_user(db, db_user)
+    if commit:
+        await db.commit()
+        await refresh_and_load_user(db, db_user)
     return db_user
 
 
@@ -1020,7 +1110,9 @@ async def clear_user_node_usages(db: AsyncSession, user_id: int, *, before: date
     await db.execute(stmt)
 
 
-async def reset_user_data_usage(db: AsyncSession, db_user: User, *, clean_chart_data: bool = False) -> User:
+async def reset_user_data_usage(
+    db: AsyncSession, db_user: User, *, clean_chart_data: bool = False, commit: bool = True
+) -> User:
     """
     Resets the data usage of a user and logs the reset.
 
@@ -1038,13 +1130,14 @@ async def reset_user_data_usage(db: AsyncSession, db_user: User, *, clean_chart_
     if db_user.status not in [UserStatus.expired, UserStatus.disabled]:
         db_user.status = UserStatus.active
 
-    await db.commit()
-    await refresh_and_load_user(db, db_user)
+    if commit:
+        await db.commit()
+        await refresh_and_load_user(db, db_user)
     return db_user
 
 
 async def bulk_reset_user_data_usage(
-    db: AsyncSession, users: list[User], *, clean_chart_data: bool = False
+    db: AsyncSession, users: list[User], *, clean_chart_data: bool = False, commit: bool = True
 ) -> list[User]:
     """
     Resets the data usage for a list of users and logs the reset.
@@ -1062,13 +1155,14 @@ async def bulk_reset_user_data_usage(
             await clear_user_node_usages(db, db_user.id)
         if db_user.status not in [UserStatus.expired, UserStatus.disabled]:
             db_user.status = UserStatus.active
-    await db.commit()
-    for user in users:
-        await refresh_and_load_user(db, user)
+    if commit:
+        await db.commit()
+        for user in users:
+            await refresh_and_load_user(db, user, load_admin_role=True)
     return users
 
 
-def _build_revoked_proxy_settings(db_user: User) -> dict:
+def build_revoked_proxy_settings(db_user: User) -> dict:
     proxy_settings = ProxyTable()
     proxy_settings.shadowsocks.method = db_user.proxy_settings.get("shadowsocks", {}).get(
         "method", "chacha20-ietf-poly1305"
@@ -1135,7 +1229,7 @@ async def reset_user_by_next(db: AsyncSession, db_user: User, *, clean_chart_dat
     return db_user
 
 
-async def revoke_user_sub(db: AsyncSession, db_user: User) -> User:
+async def revoke_user_sub(db: AsyncSession, db_user: User, *, proxy_settings: dict | None = None) -> User:
     """
     Revokes the subscription of a user and updates proxies settings.
 
@@ -1147,13 +1241,15 @@ async def revoke_user_sub(db: AsyncSession, db_user: User) -> User:
         User: The updated user object.
     """
     db_user.sub_revoked_at = datetime.now(timezone.utc)
-    db_user.proxy_settings = _build_revoked_proxy_settings(db_user)
+    db_user.proxy_settings = proxy_settings if proxy_settings is not None else build_revoked_proxy_settings(db_user)
     await db.commit()
     await refresh_and_load_user(db, db_user)
     return db_user
 
 
-async def bulk_revoke_user_sub(db: AsyncSession, users: list[User]) -> list[User]:
+async def bulk_revoke_user_sub(
+    db: AsyncSession, users: list[User], *, proxy_settings_by_user_id: dict[int, dict] | None = None
+) -> list[User]:
     """
     Revoke subscriptions for multiple users in a single transaction.
 
@@ -1167,11 +1263,15 @@ async def bulk_revoke_user_sub(db: AsyncSession, users: list[User]) -> list[User
     revoked_at = datetime.now(timezone.utc)
     for user in users:
         user.sub_revoked_at = revoked_at
-        user.proxy_settings = _build_revoked_proxy_settings(user)
+        user.proxy_settings = (
+            proxy_settings_by_user_id.get(user.id)
+            if proxy_settings_by_user_id is not None and user.id in proxy_settings_by_user_id
+            else build_revoked_proxy_settings(user)
+        )
 
     await db.commit()
     for user in users:
-        await refresh_and_load_user(db, user)
+        await refresh_and_load_user(db, user, load_admin_role=True)
     return users
 
 
@@ -1593,7 +1693,8 @@ async def start_users_expire(db: AsyncSession, users: list[User]) -> list[User]:
     """
     now = datetime.now(timezone.utc)
     for user in users:
-        expire_time = now + timedelta(seconds=user.on_hold_expire_duration)
+        duration = _safe_on_hold_expire_duration(user.on_hold_expire_duration)
+        expire_time = now + timedelta(seconds=duration) if duration is not None else None
         user.expire = expire_time
         user.on_hold_expire_duration = None
         user.on_hold_timeout = None

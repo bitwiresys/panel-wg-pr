@@ -34,10 +34,6 @@ from app.db.compiles_types import CaseSensitiveString, DaysDiff, EnumArray, Sqli
 PostgresJSONB = JSON().with_variant(JSONB(none_as_null=True), "postgresql")
 
 
-def id_column():
-    return mapped_column(SqliteCompatibleBigInteger, primary_key=True, init=False, autoincrement=True)
-
-
 def fk_id_column(target: str, **column_kwargs: Any):
     fk_kwargs = {key: column_kwargs.pop(key) for key in ("ondelete", "onupdate") if key in column_kwargs}
     return mapped_column(SqliteCompatibleBigInteger, ForeignKey(target, **fk_kwargs), **column_kwargs)
@@ -63,30 +59,70 @@ users_groups_association = Table(
 )
 
 
-class Admin(Base):
-    __tablename__ = "admins"
+class AdminStatus(str, Enum):
+    active = "active"
+    disabled = "disabled"
+    limited = "limited"
 
-    id: Mapped[int] = id_column()
+
+class IdMixin:
+    id: Mapped[int] = mapped_column(SqliteCompatibleBigInteger, primary_key=True, init=False, autoincrement=True)
+
+
+class CreatedAtUTCMixin(IdMixin):
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
+
+
+class Admin(Base, CreatedAtUTCMixin):
+    __tablename__ = "admins"
     username: Mapped[str] = mapped_column(String(34), unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(128))
     users: Mapped[List["User"]] = relationship(back_populates="admin", init=False, default_factory=list)
     usage_logs: Mapped[List["AdminUsageLogs"]] = relationship(
         back_populates="admin", init=False, default_factory=list, cascade="all, delete-orphan"
     )
-    is_sudo: Mapped[bool] = mapped_column(default=False)
+    notification_reminders: Mapped[List["AdminNotificationReminder"]] = relationship(
+        back_populates="admin", init=False, default_factory=list, cascade="all, delete-orphan"
+    )
+
     password_reset_at: Mapped[Optional[dt]] = mapped_column(DateTime(timezone=True), default=None)
     telegram_id: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
     discord_webhook: Mapped[Optional[str]] = mapped_column(String(1024), default=None)
-    discord_id: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
     used_traffic: Mapped[int] = mapped_column(BigInteger, default=0)
-    is_disabled: Mapped[bool] = mapped_column(server_default="0", default=False)
+    data_limit: Mapped[Optional[int]] = mapped_column(BigInteger, default=None)
+    status: Mapped[AdminStatus] = mapped_column(
+        SQLEnum(AdminStatus, name="adminstatus", create_constraint=True),
+        default=AdminStatus.active,
+        server_default="active",
+    )
+    last_status_change: Mapped[Optional[dt]] = mapped_column(DateTime(timezone=True), default=None)
     sub_template: Mapped[Optional[str]] = mapped_column(String(1024), default=None)
     sub_domain: Mapped[Optional[str]] = mapped_column(String(256), default=None)
     profile_title: Mapped[Optional[str]] = mapped_column(String(512), default=None)
     support_url: Mapped[Optional[str]] = mapped_column(String(1024), default=None)
     notification_enable: Mapped[Optional[Dict]] = mapped_column(PostgresJSONB, default=None)
     note: Mapped[Optional[str]] = mapped_column(String(500), default=None)
+    role_id: Mapped[int] = fk_id_column("admin_roles.id", default=0)
+    role: Mapped[Optional[AdminRole]] = relationship(back_populates="admins", init=False, lazy="select")
+    permission_overrides: Mapped[Optional[Dict]] = mapped_column(PostgresJSONB, default=None)
+
+    @hybrid_property
+    def is_disabled(self) -> bool:
+        """Backward-compat property — True when status is disabled."""
+        return self.status == AdminStatus.disabled
+
+    @is_disabled.expression
+    def is_disabled(cls):
+        return cls.status == AdminStatus.disabled
+
+    @hybrid_property
+    def is_limited(self) -> bool:
+        """True when status is limited."""
+        return self.status == AdminStatus.limited
+
+    @is_limited.expression
+    def is_limited(cls):
+        return cls.status == AdminStatus.limited
 
     @hybrid_property
     def reseted_usage(self) -> int:
@@ -105,14 +141,19 @@ class Admin(Base):
         return self.reseted_usage + self.used_traffic
 
     @property
+    def users_sync_blocked(self) -> bool:
+        """True when this admin's users should NOT be synced to nodes."""
+        return (self.status == AdminStatus.limited and self.role.disconnect_users_when_limited) or (
+            self.status == AdminStatus.disabled and self.role.disconnect_users_when_disabled
+        )
+
+    @property
     def total_users(self) -> int:
         return len(self.users)
 
 
-class AdminUsageLogs(Base):
+class AdminUsageLogs(Base, IdMixin):
     __tablename__ = "admin_usage_logs"
-
-    id: Mapped[int] = id_column()
     admin_id: Mapped[int] = fk_id_column("admins.id")
     admin: Mapped["Admin"] = relationship(back_populates="usage_logs", init=False)
     used_traffic_at_reset: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -140,11 +181,13 @@ class DataLimitResetStrategy(str, Enum):
     year = "year"
 
 
-class User(Base):
+class User(Base, CreatedAtUTCMixin):
     __tablename__ = "users"
-
-    id: Mapped[int] = id_column()
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
+    __table_args__ = (
+        Index("idx_users_admin_online", "admin_id", "online_at"),
+        Index("idx_users_admin_status", "admin_id", "status"),
+        Index("idx_users_admin_created", "admin_id", "created_at"),
+    )
     username: Mapped[str] = mapped_column(CaseSensitiveString(128), unique=True, index=True)
     node_usages: Mapped[List["NodeUserUsage"]] = relationship(
         back_populates="user",
@@ -327,19 +370,17 @@ class User(Base):
         return case((cls.expire.isnot(None), func.floor(DaysDiff())), else_=0)
 
 
-class UserSubscriptionUpdate(Base):
+class UserSubscriptionUpdate(Base, CreatedAtUTCMixin):
     __tablename__ = "user_subscription_updates"
-
-    id: Mapped[int] = id_column()
+    __table_args__ = (Index("idx_user_subscription_updates_user_id", "user_id"),)
     user_id: Mapped[int] = fk_id_column("users.id", ondelete="CASCADE")
     user: Mapped["User"] = relationship(back_populates="subscription_updates", init=False)
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     user_agent: Mapped[str] = mapped_column(String(512))
     ip: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
     hwid: Mapped[Optional[str]] = mapped_column(String(256), nullable=True, default=None)
 
 
-class UserHWID(Base):
+class UserHWID(Base, CreatedAtUTCMixin):
     __tablename__ = "user_hwids"
     __table_args__ = (
         UniqueConstraint("user_id", "hwid"),
@@ -348,15 +389,12 @@ class UserHWID(Base):
         Index("ix_user_hwids_created_at", "created_at"),
         Index("ix_user_hwids_last_used_at", "last_used_at"),
     )
-
-    id: Mapped[int] = id_column()
     user_id: Mapped[int] = fk_id_column("users.id", ondelete="CASCADE")
     user: Mapped["User"] = relationship(back_populates="hwids", init=False)
     hwid: Mapped[str] = mapped_column(String(256), nullable=False)
     device_os: Mapped[Optional[str]] = mapped_column(String(256), default=None)
     os_version: Mapped[Optional[str]] = mapped_column(String(128), default=None)
     device_model: Mapped[Optional[str]] = mapped_column(String(256), default=None)
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     last_used_at: Mapped[dt] = mapped_column(
         DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False
     )
@@ -370,15 +408,13 @@ template_group_association = Table(
 )
 
 
-class NextPlan(Base):
+class NextPlan(Base, IdMixin):
     __tablename__ = "next_plans"
     __table_args__ = (
         # user_id will already have an index from the FK
         # Add if you frequently query by template
         Index("ix_next_plans_user_template_id", "user_template_id"),
     )
-
-    id: Mapped[int] = id_column()
     user_id: Mapped[int] = fk_id_column("users.id", ondelete="CASCADE")
     user_template_id: Mapped[Optional[int]] = fk_id_column("user_templates.id", ondelete="SET NULL")
     user: Mapped["User"] = relationship(back_populates="next_plan", init=False)
@@ -393,10 +429,8 @@ class UserStatusCreate(str, Enum):
     on_hold = "on_hold"
 
 
-class UserTemplate(Base):
+class UserTemplate(Base, IdMixin):
     __tablename__ = "user_templates"
-
-    id: Mapped[int] = id_column()
     name: Mapped[str] = mapped_column(String(64), unique=True)
     username_prefix: Mapped[Optional[str]] = mapped_column(String(20))
     username_suffix: Mapped[Optional[str]] = mapped_column(String(20))
@@ -423,24 +457,20 @@ class UserTemplate(Base):
         return [group.id for group in self.groups]
 
 
-class UserUsageResetLogs(Base):
+class UserUsageResetLogs(Base, IdMixin):
     __tablename__ = "user_usage_logs"
     __table_args__ = (
         # Index for user-specific queries sorted by time
         Index("ix_user_usage_logs_user_id_reset_at", "user_id", "reset_at"),
     )
-
-    id: Mapped[int] = id_column()
     user_id: Mapped[Optional[int]] = fk_id_column("users.id", ondelete="CASCADE", nullable=True)
     user: Mapped["User"] = relationship(back_populates="usage_logs", init=False)
     used_traffic_at_reset: Mapped[int] = mapped_column(BigInteger, nullable=False)
     reset_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default=lambda: dt.now(tz.utc), init=False)
 
 
-class ProxyInbound(Base):
+class ProxyInbound(Base, IdMixin):
     __tablename__ = "inbounds"
-
-    id: Mapped[int] = id_column()
     tag: Mapped[str] = mapped_column(String(256), unique=True, index=True)
     hosts: Mapped[List["ProxyHost"]] = relationship(back_populates="inbound", init=False)
     groups: Mapped[List["Group"]] = relationship(
@@ -487,10 +517,8 @@ ProxyHostFingerprint = Enum(
 )
 
 
-class ProxyHost(Base):
+class ProxyHost(Base, IdMixin):
     __tablename__ = "hosts"
-
-    id: Mapped[int] = id_column()
     remark: Mapped[str] = mapped_column(String(256), unique=False, nullable=False)
     port: Mapped[Optional[int]] = mapped_column(nullable=True)
     path: Mapped[Optional[str]] = mapped_column(String(256), unique=False, nullable=True)
@@ -539,10 +567,8 @@ class ProxyHost(Base):
     subscription_templates: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON(none_as_null=True), default=None)
 
 
-class System(Base):
+class System(Base, IdMixin):
     __tablename__ = "system"
-
-    id: Mapped[int] = id_column()
     uplink: Mapped[int] = mapped_column(BigInteger, default=0)
     downlink: Mapped[int] = mapped_column(BigInteger, default=0)
 
@@ -567,11 +593,8 @@ class NodeStatus(str, Enum):
     limited = "limited"
 
 
-class Node(Base):
+class Node(Base, CreatedAtUTCMixin):
     __tablename__ = "nodes"
-
-    id: Mapped[int] = id_column()
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     name: Mapped[str] = mapped_column(CaseSensitiveString(256), unique=True)
     address: Mapped[str] = mapped_column(String(256), unique=False, nullable=False)
     port: Mapped[int] = mapped_column(unique=False, nullable=False)
@@ -666,7 +689,7 @@ class Node(Base):
         return cls.downlink + cls.uplink
 
 
-class NodeUserUsage(Base):
+class NodeUserUsage(Base, IdMixin):
     __tablename__ = "node_user_usages"
     __table_args__ = (
         UniqueConstraint("created_at", "user_id", "node_id"),
@@ -679,8 +702,6 @@ class NodeUserUsage(Base):
         ),  # Node-specific queries with time range
         Index("ix_node_user_usages_created_at", "created_at"),  # Time-based cleanup/aggregation
     )
-
-    id: Mapped[int] = id_column()
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), unique=False)  # 10 minute per record
     user_id: Mapped[int] = fk_id_column("users.id", ondelete="CASCADE")
     user: Mapped["User"] = relationship(back_populates="node_usages", init=False)
@@ -689,7 +710,7 @@ class NodeUserUsage(Base):
     used_traffic: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
-class NodeUsage(Base):
+class NodeUsage(Base, IdMixin):
     __tablename__ = "node_usages"
     __table_args__ = (
         UniqueConstraint("created_at", "node_id"),
@@ -697,8 +718,6 @@ class NodeUsage(Base):
         Index("ix_node_usages_created_at", "created_at"),
         # The unique constraint already creates an index on (created_at, node_id)
     )
-
-    id: Mapped[int] = id_column()
     created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), unique=False)  # 10 minute per record
     node_id: Mapped[Optional[int]] = fk_id_column("nodes.id", ondelete="CASCADE")
     node: Mapped["Node"] = relationship(back_populates="usages", init=False)
@@ -706,26 +725,20 @@ class NodeUsage(Base):
     downlink: Mapped[int] = mapped_column(BigInteger, default=0)
 
 
-class NodeUsageResetLogs(Base):
+class NodeUsageResetLogs(Base, CreatedAtUTCMixin):
     __tablename__ = "node_usage_reset_logs"
     __table_args__ = (
         # Index for node-specific queries sorted by time
         Index("ix_node_usage_reset_logs_node_id_created_at", "node_id", "created_at"),
     )
-
-    id: Mapped[int] = id_column()
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     node_id: Mapped[int] = fk_id_column("nodes.id", ondelete="CASCADE")
     node: Mapped["Node"] = relationship(back_populates="usage_logs", init=False)
     uplink: Mapped[int] = mapped_column(BigInteger, nullable=False)
     downlink: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
-class NotificationReminder(Base):
+class NotificationReminder(Base, CreatedAtUTCMixin):
     __tablename__ = "notification_reminders"
-
-    id: Mapped[int] = id_column()
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     user_id: Mapped[int] = fk_id_column("users.id", ondelete="CASCADE")
     user: Mapped["User"] = relationship(back_populates="notification_reminders", init=False)
     type: Mapped[ReminderType] = mapped_column(SQLEnum(ReminderType))
@@ -733,10 +746,17 @@ class NotificationReminder(Base):
     expires_at: Mapped[Optional[dt]] = mapped_column(DateTime(timezone=True), default=None)
 
 
-class Group(Base):
-    __tablename__ = "groups"
+class AdminNotificationReminder(Base, CreatedAtUTCMixin):
+    __tablename__ = "admin_notification_reminders"
+    __table_args__ = (Index("ix_admin_notification_reminders_admin_id_type", "admin_id", "type"),)
+    admin_id: Mapped[int] = fk_id_column("admins.id", ondelete="CASCADE")
+    admin: Mapped["Admin"] = relationship(back_populates="notification_reminders", init=False)
+    type: Mapped[ReminderType] = mapped_column(SQLEnum(ReminderType))
+    threshold: Mapped[Optional[int]] = mapped_column(default=None)
 
-    id: Mapped[int] = id_column()
+
+class Group(Base, IdMixin):
+    __tablename__ = "groups"
     name: Mapped[str] = mapped_column(String(64))
     users: Mapped[List["User"]] = relationship(secondary=users_groups_association, back_populates="groups", init=False)
     inbounds: Mapped[List["ProxyInbound"]] = relationship(
@@ -747,17 +767,48 @@ class Group(Base):
     )
     is_disabled: Mapped[bool] = mapped_column(server_default="0", default=False)
 
-    @property
-    def inbound_ids(self):
+    @hybrid_property
+    def inbound_ids(self) -> list[int]:
         return [inbound.id for inbound in self.inbounds]
 
-    @property
-    def inbound_tags(self):
+    @inbound_ids.expression
+    def inbound_ids(cls):
+        return (
+            select(func.aggregate_strings(ProxyInbound.id, ","))
+            .select_from(inbounds_groups_association)
+            .join(ProxyInbound, inbounds_groups_association.c.inbound_id == ProxyInbound.id)
+            .where(inbounds_groups_association.c.group_id == cls.id)
+            .scalar_subquery()
+            .label("inbound_ids")
+        )
+
+    @hybrid_property
+    def inbound_tags(self) -> list[str]:
         return [inbound.tag for inbound in self.inbounds]
 
-    @property
-    def total_users(self):
+    @inbound_tags.expression
+    def inbound_tags(cls):
+        return (
+            select(func.aggregate_strings(ProxyInbound.tag, ","))
+            .select_from(inbounds_groups_association)
+            .join(ProxyInbound, inbounds_groups_association.c.inbound_id == ProxyInbound.id)
+            .where(inbounds_groups_association.c.group_id == cls.id)
+            .scalar_subquery()
+            .label("inbound_tags")
+        )
+
+    @hybrid_property
+    def total_users(self) -> int:
         return len(self.users)
+
+    @total_users.expression
+    def total_users(cls):
+        return (
+            select(func.count(users_groups_association.c.user_id))
+            .where(users_groups_association.c.groups_id == cls.id)
+            .scalar_subquery()
+            .label("total_users")
+        )
 
 
 class CoreType(str, Enum):
@@ -767,11 +818,8 @@ class CoreType(str, Enum):
     singbox = "singbox"
 
 
-class CoreConfig(Base):
+class CoreConfig(Base, CreatedAtUTCMixin):
     __tablename__ = "core_configs"
-
-    id: Mapped[int] = id_column()
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     name: Mapped[str] = mapped_column(String(256))
     config: Mapped[Dict[str, Any]] = mapped_column(JSON(False))
     type: Mapped[CoreType] = mapped_column(SQLEnum(CoreType), default=CoreType.xray, server_default=CoreType.xray)
@@ -785,7 +833,6 @@ class ClientTemplate(Base):
         UniqueConstraint("template_type", "name"),
         Index("ix_client_templates_template_type", "template_type"),
     )
-
     id: Mapped[int] = mapped_column(primary_key=True, init=False, autoincrement=True)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     template_type: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -794,11 +841,8 @@ class ClientTemplate(Base):
     is_system: Mapped[bool] = mapped_column(default=False, server_default="0")
 
 
-class NodeStat(Base):
+class NodeStat(Base, CreatedAtUTCMixin):
     __tablename__ = "node_stats"
-
-    id: Mapped[int] = id_column()
-    created_at: Mapped[dt] = mapped_column(DateTime(timezone=True), default_factory=lambda: dt.now(tz.utc), init=False)
     node_id: Mapped[int] = fk_id_column("nodes.id")
     node: Mapped["Node"] = relationship(back_populates="stats", init=False)
     mem_total: Mapped[int] = mapped_column(BigInteger, unique=False, nullable=False)
@@ -809,15 +853,46 @@ class NodeStat(Base):
     outgoing_bandwidth_speed: Mapped[int] = mapped_column(BigInteger, unique=False, nullable=False)
 
 
-class Settings(Base):
+class Settings(Base, IdMixin):
     __tablename__ = "settings"
-
-    id: Mapped[int] = id_column()
     telegram: Mapped[dict] = mapped_column(JSON())
-    discord: Mapped[dict] = mapped_column(JSON())
     webhook: Mapped[dict] = mapped_column(JSON())
     notification_settings: Mapped[dict] = mapped_column(JSON())
     notification_enable: Mapped[dict] = mapped_column(JSON())
     subscription: Mapped[dict] = mapped_column(JSON())
     hwid: Mapped[dict] = mapped_column(JSON())
     general: Mapped[dict] = mapped_column(JSON())
+
+
+class AdminRole(Base, CreatedAtUTCMixin):
+    __tablename__ = "admin_roles"
+    name: Mapped[str] = mapped_column(String(64), unique=True)
+    is_owner: Mapped[bool] = mapped_column(default=False, server_default="0")
+    permissions: Mapped[Dict] = mapped_column(PostgresJSONB, default_factory=dict)
+    limits: Mapped[Dict] = mapped_column(PostgresJSONB, default_factory=dict)
+    features: Mapped[Dict] = mapped_column(PostgresJSONB, default_factory=dict)
+    access: Mapped[Dict] = mapped_column(PostgresJSONB, default_factory=dict)
+    hwid: Mapped[Dict] = mapped_column(PostgresJSONB, default_factory=dict)
+    disabled_when_limited: Mapped[bool] = mapped_column(default=False, server_default="0")
+    disconnect_users_when_limited: Mapped[bool] = mapped_column(default=True, server_default="1")
+    disconnect_users_when_disabled: Mapped[bool] = mapped_column(default=True, server_default="1")
+    admins: Mapped[List["Admin"]] = relationship(back_populates="role", init=False, viewonly=True, lazy="noload")
+
+    @hybrid_property
+    def is_builtin(self) -> bool:
+        """True for the 3 default roles (owner, administrator, operator) that cannot be deleted."""
+        return self.id <= 3
+
+    @is_builtin.expression
+    def is_builtin(cls):
+        return cls.id <= 3
+
+
+class TempKey(Base):
+    __tablename__ = "temp_keys"
+
+    key: Mapped[str] = mapped_column(String(36), primary_key=True, init=True)
+    action: Mapped[str] = mapped_column(String(32))
+    expires_at: Mapped[dt] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[Optional[dt]] = mapped_column(DateTime(timezone=True), default=None)
+    used_by_ip: Mapped[Optional[str]] = mapped_column(String(45), default=None)

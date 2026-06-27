@@ -1,5 +1,5 @@
 import { Skeleton } from '@/components/ui/skeleton'
-import { NodeRealtimeStats, NodeSimple, SystemStats, useRealtimeNodeStats } from '@/service/api'
+import { NodeRealtimeStats, NodeSimple, SystemResourceStats, SystemUsersStats, useRealtimeNodeStats } from '@/service/api'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CostumeBarChart } from '@/components/charts/costume-bar-chart'
@@ -12,16 +12,18 @@ import { BarChart3 } from 'lucide-react'
 import { UserCountsChart } from '@/components/charts/user-counts-chart'
 
 interface StatisticsChartsProps {
-  data?: SystemStats
+  data?: SystemResourceStats
+  usersData?: SystemUsersStats
   isLoading: boolean
   error?: { message?: string } | null
   selectedServer: string
-  is_sudo: boolean
+  canViewNodeStats: boolean
+  canViewSystemStats: boolean
   nodesData?: NodeSimple[]
   isLoadingNodes?: boolean
 }
 
-export default function StatisticsCharts({ data, isLoading, error, selectedServer, is_sudo, nodesData = [], isLoadingNodes = false }: StatisticsChartsProps) {
+export default function StatisticsCharts({ data, usersData, isLoading, error, selectedServer, canViewNodeStats, canViewSystemStats, nodesData = [], isLoadingNodes = false }: StatisticsChartsProps) {
   const { t } = useTranslation()
 
   // Add state for chart refresh
@@ -29,12 +31,11 @@ export default function StatisticsCharts({ data, isLoading, error, selectedServe
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const lastWindowWidthRef = useRef<number>(typeof window !== 'undefined' ? window.innerWidth : 0)
 
-  // For non-sudo admins, selectedServer should always be 'master'
-  const actualSelectedServer = is_sudo ? selectedServer : 'master'
-  const selectedNodeId = actualSelectedServer === 'master' ? undefined : parseInt(actualSelectedServer, 10)
+  const actualSelectedServer = selectedServer === 'master' && !canViewSystemStats ? '' : canViewNodeStats ? selectedServer : 'master'
+  const selectedNodeId = actualSelectedServer && actualSelectedServer !== 'master' ? parseInt(actualSelectedServer, 10) : undefined
   const selectedNode = selectedNodeId !== undefined ? nodesData.find(node => node.id === selectedNodeId) : undefined
   const selectedNodeConnected = selectedNode?.status === 'connected'
-  const shouldFetchNodeRealtime = is_sudo && !!selectedNodeId && selectedNodeConnected
+  const shouldFetchNodeRealtime = canViewNodeStats && !!selectedNodeId && selectedNodeConnected
 
   // Only fetch realtime node stats for connected nodes.
   const { data: nodeStats, isLoading: isLoadingNodeStats } = useRealtimeNodeStats(selectedNodeId || 0, {
@@ -89,8 +90,8 @@ export default function StatisticsCharts({ data, isLoading, error, selectedServe
     }
   }, [selectedServer])
 
-  if ((actualSelectedServer === 'master' && isLoading) || (is_sudo && isLoadingNodes) || (shouldFetchNodeRealtime && isLoadingNodeStats)) {
-    return <StatisticsSkeletons is_sudo={is_sudo} />
+  if ((actualSelectedServer === 'master' && isLoading) || (canViewNodeStats && isLoadingNodes) || (shouldFetchNodeRealtime && isLoadingNodeStats)) {
+    return <StatisticsSkeletons canViewNodeStats={canViewNodeStats} />
   }
 
   if (error) {
@@ -107,9 +108,13 @@ export default function StatisticsCharts({ data, isLoading, error, selectedServe
     )
   }
 
+  if (!actualSelectedServer) {
+    return <EmptyState type="no-data" title={t('selectServer')} description={t('statistics.selectNodeToView')} className="min-h-[400px]" />
+  }
+
   // Get the current stats based on selection
-  const currentStats = actualSelectedServer === 'master' ? (data as SystemStats) : selectedNodeConnected ? (nodeStats as NodeRealtimeStats) : null
-  const showRealtimeSystemStats = actualSelectedServer === 'master' || selectedNodeConnected
+  const currentStats = actualSelectedServer === 'master' ? data : selectedNodeConnected ? (nodeStats as NodeRealtimeStats) : null
+  const showRealtimeSystemStats = (actualSelectedServer === 'master' && !!data) || selectedNodeConnected
 
   return (
     <div className="space-y-8">
@@ -123,20 +128,20 @@ export default function StatisticsCharts({ data, isLoading, error, selectedServe
             </div>
           </div>
           <div className="animate-slide-up transform-gpu" style={{ animationDuration: '500ms', animationDelay: '100ms', animationFillMode: 'both' }}>
-            <SystemStatisticsSection currentStats={currentStats} />
+            <SystemStatisticsSection currentStats={currentStats} usersStats={actualSelectedServer === 'master' ? usersData : undefined} />
           </div>
         </div>
       )}
 
       {/* Charts Section */}
       <div className="space-y-8">
-        {is_sudo && (
+        {canViewNodeStats && (
           <div className="animate-slide-up transform-gpu" style={{ animationDuration: '500ms', animationDelay: '260ms', animationFillMode: 'both' }}>
             {actualSelectedServer === 'master' ? <AllNodesStackedBarChart /> : <CostumeBarChart nodeId={selectedNodeId} />}
           </div>
         )}
         <div className="animate-slide-up transform-gpu" style={{ animationDuration: '500ms', animationDelay: '300ms', animationFillMode: 'both' }}>
-          <UserCountsChart nodeId={selectedNodeId} isSudo={is_sudo} nodesData={nodesData} />
+          <UserCountsChart nodeId={selectedNodeId} isSudo={canViewNodeStats} nodesData={nodesData} />
         </div>
         {actualSelectedServer === 'master' && (
           <div className="animate-slide-up transform-gpu" style={{ animationDuration: '500ms', animationDelay: '310ms', animationFillMode: 'both' }}>
@@ -157,7 +162,7 @@ export default function StatisticsCharts({ data, isLoading, error, selectedServe
   )
 }
 
-function StatisticsSkeletons({ is_sudo }: { is_sudo: boolean }) {
+function StatisticsSkeletons({ canViewNodeStats }: { canViewNodeStats: boolean }) {
   return (
     <div className="space-y-8">
       {/* System Stats Skeleton - show for all admins */}
@@ -185,8 +190,7 @@ function StatisticsSkeletons({ is_sudo }: { is_sudo: boolean }) {
         </div>
       </div>
 
-      {/* Charts Skeleton - only show for sudo admins */}
-      {is_sudo && (
+      {canViewNodeStats && (
         <div className="space-y-8">
           <Skeleton className="h-[400px] w-full" />
           <Skeleton className="h-[360px] w-full" />

@@ -3,24 +3,25 @@ import { cn } from '@/lib/utils.ts'
 import { useTranslation } from 'react-i18next'
 import { Card, CardTitle } from '@/components/ui/card'
 import { CountUp } from '@/components/ui/count-up'
-import { User, UserCheck, UserX } from 'lucide-react'
+import { User, UserCheck, UserLock, UserX } from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 
 interface AdminsStatisticsProps {
-  counts: { total: number; active: number; disabled: number } | null
+  counts: { total: number; active: number; disabled: number; limited: number } | null
 }
 
 export default function AdminStatisticsSection({ counts }: AdminsStatisticsProps) {
   const { t } = useTranslation()
   const dir = useDirDetection()
-  const [prevStats, setPrevStats] = useState<{ total: number; active: number; disabled: number } | null>(null)
+  const [prevStats, setPrevStats] = useState<{ total: number; active: number; disabled: number; limited: number } | null>(null)
   const [isIncreased, setIsIncreased] = useState<Record<string, boolean>>({})
 
   const total = counts?.total || 0
   const active = counts?.active || 0
   const disabled = counts?.disabled || 0
+  const limited = counts?.limited || 0
 
-  const currentStats = { total, active, disabled }
+  const currentStats = { total, active, disabled, limited }
 
   useEffect(() => {
     if (prevStats) {
@@ -28,6 +29,7 @@ export default function AdminStatisticsSection({ counts }: AdminsStatisticsProps
         total: currentStats.total > prevStats.total,
         active: currentStats.active > prevStats.active,
         disabled: currentStats.disabled > prevStats.disabled,
+        limited: currentStats.limited > prevStats.limited,
       })
     }
     setPrevStats(currentStats)
@@ -56,6 +58,13 @@ export default function AdminStatisticsSection({ counts }: AdminsStatisticsProps
       color: '',
       key: 'disabled',
     },
+    {
+      icon: UserLock,
+      label: t('admins.limited'),
+      value: limited,
+      color: '',
+      key: 'limited',
+    },
   ]
 
   return (
@@ -64,7 +73,7 @@ export default function AdminStatisticsSection({ counts }: AdminsStatisticsProps
         <Card
           key={stat.label}
           dir={dir}
-          className={cn('group relative w-full animate-fade-in overflow-hidden rounded-md transition-all duration-500')}
+          className={cn('group animate-fade-in relative w-full overflow-hidden rounded-md transition-all duration-500')}
           style={{
             animationDuration: '600ms',
             animationDelay: `${(idx + 1) * 100}ms`,
@@ -73,7 +82,7 @@ export default function AdminStatisticsSection({ counts }: AdminsStatisticsProps
         >
           <div
             className={cn(
-              'absolute inset-0 bg-gradient-to-r from-primary/10 to-transparent opacity-0 transition-opacity duration-500',
+              'from-primary/10 absolute inset-0 bg-gradient-to-r to-transparent opacity-0 transition-opacity duration-500',
               'dark:from-primary/5 dark:to-transparent',
               'group-hover:opacity-100',
             )}

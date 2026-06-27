@@ -3,6 +3,7 @@ import { LoadingSpinner } from '@/components/common/loading-spinner'
 import PageHeader from '@/components/layout/page-header'
 import { getDocsUrl } from '@/utils/docs-url'
 import { useAdmin } from '@/hooks/use-admin'
+import { hasPermission, hasScopeAll } from '@/utils/rbac'
 import { cn } from '@/lib/utils'
 import {
   ArrowUpDown,
@@ -17,7 +18,6 @@ import {
   Lock,
   Logs,
   LucideIcon,
-  MessageCircle,
   Network,
   Palette,
   Send,
@@ -42,7 +42,6 @@ const SETTINGS_SUDO_TABS: TabDef[] = [
   { id: 'notifications', labelKey: 'settings.notifications.title', icon: Bell, url: '/settings/notifications' },
   { id: 'subscriptions', labelKey: 'settings.subscriptions.title', icon: ListTodo, url: '/settings/subscriptions' },
   { id: 'telegram', labelKey: 'settings.telegram.title', icon: Send, url: '/settings/telegram' },
-  { id: 'discord', labelKey: 'settings.discord.title', icon: MessageCircle, url: '/settings/discord' },
   { id: 'webhook', labelKey: 'settings.webhook.title', icon: Webhook, url: '/settings/webhook' },
   { id: 'cleanup', labelKey: 'settings.cleanup.title', icon: Database, url: '/settings/cleanup' },
   { id: 'theme', labelKey: 'theme.title', icon: Palette, url: '/settings/theme' },
@@ -123,13 +122,7 @@ function TabStripPlaceholder({ tabs, activeId }: { tabs: TabDef[]; activeId: str
         const Icon = tab.icon
         const isActive = activeId === tab.id
         return (
-          <div
-            key={tab.id}
-            className={cn(
-              'relative shrink-0 whitespace-nowrap px-3 py-2 text-sm font-medium',
-              isActive ? 'border-b-2 border-primary text-foreground' : 'text-muted-foreground',
-            )}
-          >
+          <div key={tab.id} className={cn('relative shrink-0 px-3 py-2 text-sm font-medium whitespace-nowrap', isActive ? 'border-primary text-foreground border-b-2' : 'text-muted-foreground')}>
             <div className="flex items-center gap-1.5">
               <Icon className="h-4 w-4 shrink-0" aria-hidden />
               {tab.id === 'core' ? (
@@ -160,9 +153,9 @@ function NodesTabbedFallback({ pathname }: { pathname: string }) {
   const header = nodesHeader(pathname)
   const activeId = nodesActiveTabId(pathname)
   return (
-    <div className="flex w-full min-h-0 flex-1 flex-col items-start gap-0">
+    <div className="flex min-h-0 w-full flex-1 flex-col items-start gap-0">
       <PageHeader title={header.title} description={header.description} tutorialUrl={getDocsUrl(pathname)} />
-      <div className="flex w-full min-h-0 flex-1 flex-col">
+      <div className="flex min-h-0 w-full flex-1 flex-col">
         <TabStripPlaceholder tabs={NODES_TABS} activeId={activeId} />
         <ContentSpinner />
       </div>
@@ -204,8 +197,7 @@ function BulkTabbedFallback({ pathname, isSudo }: { pathname: string; isSudo: bo
 
 function TemplatesTabbedFallback({ pathname }: { pathname: string }) {
   const header = templatesHeader(pathname)
-  const activeId =
-    pathname === '/templates/client' ? 'templates.clientTemplates' : 'templates.userTemplates'
+  const activeId = pathname === '/templates/client' ? 'templates.clientTemplates' : 'templates.userTemplates'
   return (
     <div className="flex w-full flex-col items-start gap-0">
       <PageHeader title={header.title} description={header.description} tutorialUrl={getDocsUrl(pathname)} />
@@ -224,17 +216,17 @@ function TemplatesTabbedFallback({ pathname }: { pathname: string }) {
 export function TabbedRouteSuspenseFallback() {
   const { pathname } = useLocation()
   const { admin } = useAdmin()
-  /** While admin is still resolving, prefer full tab strip (typical sudo layout). */
-  const isSudo = admin?.is_sudo !== false
+  const canUseSettings = (hasPermission(admin, 'settings', 'read') || hasPermission(admin, 'settings', 'read_general')) && hasPermission(admin, 'settings', 'update')
+  const canUseBulkAll = hasScopeAll(admin, 'users', 'update')
 
   if (pathname.startsWith('/nodes')) {
     return <NodesTabbedFallback pathname={pathname} />
   }
   if (pathname.startsWith('/settings')) {
-    return <SettingsTabbedFallback pathname={pathname} isSudo={isSudo} />
+    return <SettingsTabbedFallback pathname={pathname} isSudo={canUseSettings} />
   }
   if (pathname.startsWith('/bulk')) {
-    return <BulkTabbedFallback pathname={pathname} isSudo={isSudo} />
+    return <BulkTabbedFallback pathname={pathname} isSudo={canUseBulkAll} />
   }
   if (pathname.startsWith('/templates')) {
     return <TemplatesTabbedFallback pathname={pathname} />

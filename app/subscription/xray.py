@@ -86,11 +86,10 @@ class XrayConfiguration(BaseSubscription):
 
         # Handle different return types
         if isinstance(result, tuple):
-            # VMess, VLESS, Trojan return (main_outbound, extra_outbounds_list)
+            # VMess, VLESS, Trojan, Shadowsocks, WireGuard return (main_outbound, extra_outbounds_list)
             main_outbound, extra_outbounds = result
             all_outbounds = [main_outbound] + extra_outbounds
         else:
-            # Shadowsocks returns just a dict
             all_outbounds = [result]
 
         self.add_config(remarks=remark, outbounds=all_outbounds, template_content=template_content)
@@ -158,7 +157,9 @@ class XrayConfiguration(BaseSubscription):
             "uplinkChunkSize": config.uplink_chunk_size,
             "noGRPCHeader": config.no_grpc_header,
             "xmux": config.xmux,
-            "downloadSettings": self._download_config(config.download_settings) if config.download_settings else None,
+            "downloadSettings": self._xhttp_download_config(config.download_settings)
+            if config.download_settings
+            else None,
         }
 
         if config.random_user_agent:
@@ -169,6 +170,11 @@ class XrayConfiguration(BaseSubscription):
 
         xhttp_settings["extra"] = extra
         return self._normalize_and_remove_none_values(xhttp_settings)
+
+    def _xhttp_download_config(self, download_settings: SubscriptionInboundData | dict) -> dict:
+        if isinstance(download_settings, dict):
+            return download_settings
+        return self._download_config(download_settings)
 
     def _transport_grpc(self, config: GRPCTransportConfig, path: str) -> dict:
         """Handle GRPC transport - only gets GRPC config"""
@@ -274,23 +280,27 @@ class XrayConfiguration(BaseSubscription):
         """Handle QUIC transport - only gets QUIC config"""
         host = config.host if isinstance(config.host, str) else (config.host[0] if config.host else "")
 
-        return self._normalize_and_remove_none_values({
-            "security": host,
-            "header": {"type": config.header_type},
-            "key": path,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "security": host,
+                "header": {"type": config.header_type},
+                "key": path,
+            }
+        )
 
     def _transport_kcp(self, config: KCPTransportConfig, path: str) -> dict:
         """Handle KCP transport - only gets KCP config"""
-        return self._normalize_and_remove_none_values({
-            "mtu": config.mtu if config.mtu is not None else 1350,
-            "tti": config.tti if config.tti is not None else 50,
-            "uplinkCapacity": config.uplink_capacity if config.uplink_capacity is not None else 5,
-            "downlinkCapacity": config.downlink_capacity if config.downlink_capacity is not None else 20,
-            "congestion": config.congestion,
-            "readBufferSize": config.read_buffer_size if config.read_buffer_size is not None else 2,
-            "writeBufferSize": config.write_buffer_size if config.write_buffer_size is not None else 2,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "mtu": config.mtu if config.mtu is not None else 1350,
+                "tti": config.tti if config.tti is not None else 50,
+                "uplinkCapacity": config.uplink_capacity if config.uplink_capacity is not None else 5,
+                "downlinkCapacity": config.downlink_capacity if config.downlink_capacity is not None else 20,
+                "congestion": config.congestion,
+                "readBufferSize": config.read_buffer_size if config.read_buffer_size is not None else 2,
+                "writeBufferSize": config.write_buffer_size if config.write_buffer_size is not None else 2,
+            }
+        )
 
     def _apply_transport(self, network: str, inbound: SubscriptionInboundData, path: str) -> dict | None:
         """Apply transport settings using registry pattern"""
@@ -306,15 +316,17 @@ class XrayConfiguration(BaseSubscription):
         sni = tls_config.sni if isinstance(tls_config.sni, str) else (tls_config.sni[0] if tls_config.sni else None)
 
         if security == "reality":
-            return self._normalize_and_remove_none_values({
-                "serverName": sni,
-                "fingerprint": tls_config.fingerprint,
-                "show": False,
-                "publicKey": tls_config.reality_public_key,
-                "shortId": tls_config.reality_short_id,
-                "spiderX": tls_config.reality_spx,
-                "mldsa65Verify": tls_config.mldsa65_verify,
-            })
+            return self._normalize_and_remove_none_values(
+                {
+                    "serverName": sni,
+                    "fingerprint": tls_config.fingerprint,
+                    "show": False,
+                    "publicKey": tls_config.reality_public_key,
+                    "shortId": tls_config.reality_short_id,
+                    "spiderX": tls_config.reality_spx,
+                    "mldsa65Verify": tls_config.mldsa65_verify,
+                }
+            )
         else:  # tls
             config = {
                 "serverName": sni,
@@ -383,11 +395,13 @@ class XrayConfiguration(BaseSubscription):
             sockopt=sockopt,
         )
 
-        return self._normalize_and_remove_none_values({
-            "address": download_settings.address,
-            "port": self._select_port(download_settings.port),
-            **stream_settings,
-        })
+        return self._normalize_and_remove_none_values(
+            {
+                "address": download_settings.address,
+                "port": self._select_port(download_settings.port),
+                **stream_settings,
+            }
+        )
 
     # ========== Protocol Builders (Registry Methods) ==========
 
@@ -430,7 +444,7 @@ class XrayConfiguration(BaseSubscription):
             user_settings=user_settings,
         )
 
-    def _build_shadowsocks(self, address: str, inbound: SubscriptionInboundData, settings: dict) -> dict:
+    def _build_shadowsocks(self, address: str, inbound: SubscriptionInboundData, settings: dict) -> tuple:
         """Build Shadowsocks outbound"""
         method, password = self.detect_shadowsocks_2022(
             inbound.is_2022,
@@ -455,12 +469,23 @@ class XrayConfiguration(BaseSubscription):
             },
         }
 
-        if inbound.finalmask is not None:
+        # Handle fragment/noise - create dialer outbound
+        extra_outbounds = []
+        sockopt = None
+        if inbound.fragment_settings or inbound.noise_settings:
+            dialer_outbound = self.make_dialer_outbound(inbound.fragment_settings, inbound.noise_settings, "dialer")
+            if dialer_outbound:
+                extra_outbounds.append(dialer_outbound)
+                sockopt = {"dialerProxy": "dialer"}
+
+        if sockopt or inbound.finalmask:
             outbound["streamSettings"] = self._stream_setting_config(
-                network=inbound.network, finalmask=inbound.finalmask
+                network=inbound.network,
+                sockopt=sockopt,
+                finalmask=inbound.finalmask,
             )
 
-        return self._normalize_and_remove_none_values(outbound)
+        return self._normalize_and_remove_none_values(outbound), extra_outbounds
 
     def _build_hysteria(self, address: str, inbound: SubscriptionInboundData, settings: dict) -> tuple:
         """Build Hysteria outbound - returns (main_outbound, extra_outbounds_list)"""
@@ -471,7 +496,7 @@ class XrayConfiguration(BaseSubscription):
             user_settings={"auth": str(settings["auth"])},
         )
 
-    def _build_wireguard(self, address: str, inbound: SubscriptionInboundData, settings: dict) -> dict:
+    def _build_wireguard(self, address: str, inbound: SubscriptionInboundData, settings: dict) -> tuple:
         """Build WireGuard outbound for Xray subscriptions."""
         private_key = settings.get("private_key", "")
         peer_ips = list(settings.get("peer_ips") or [])
@@ -500,7 +525,23 @@ class XrayConfiguration(BaseSubscription):
             },
         }
 
-        return self._normalize_and_remove_none_values(outbound)
+        # Handle fragment/noise - create dialer outbound
+        extra_outbounds = []
+        sockopt = None
+        if inbound.fragment_settings or inbound.noise_settings:
+            dialer_outbound = self.make_dialer_outbound(inbound.fragment_settings, inbound.noise_settings, "dialer")
+            if dialer_outbound:
+                extra_outbounds.append(dialer_outbound)
+                sockopt = {"dialerProxy": "dialer"}
+
+        # Use streamSettings for sockopt and finalmask
+        if sockopt or inbound.finalmask:
+            outbound["streamSettings"] = self._stream_setting_config(
+                sockopt=sockopt,
+                finalmask=inbound.finalmask,
+            )
+
+        return self._normalize_and_remove_none_values(outbound), extra_outbounds
 
     def _build_outbound(
         self,

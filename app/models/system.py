@@ -12,7 +12,7 @@ class InboundSummary(BaseModel):
     wireguard_addresses: list[str] | None = None
 
 
-class SystemStats(BaseModel):
+class SystemResourceStats(BaseModel):
     version: str
     uptime_seconds: int
     mem_total: int | None = None
@@ -21,6 +21,9 @@ class SystemStats(BaseModel):
     disk_used: int | None = None
     cpu_cores: int | None = None
     cpu_usage: float | None = None
+
+
+class SystemUsersStats(BaseModel):
     total_user: int
     online_users: int
     active_users: int
@@ -30,6 +33,10 @@ class SystemStats(BaseModel):
     limited_users: int
     incoming_bandwidth: int
     outgoing_bandwidth: int
+
+
+class SystemStats(SystemResourceStats, SystemUsersStats):
+    pass
 
 
 class WorkerHealth(BaseModel):

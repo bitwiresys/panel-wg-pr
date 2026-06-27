@@ -16,11 +16,13 @@ interface SortableHostProps {
   onDuplicate: (host: BaseHost) => Promise<void>
   onDataChanged?: () => void // New callback for notifying parent about data changes
   disabled?: boolean // Disable drag and drop when updating priorities
+  canUpdate?: boolean
+  canCreate?: boolean
   selectionControl?: ReactNode
   selected?: boolean
 }
 
-export default function SortableHost({ host, onEdit, onDuplicate, onDataChanged, disabled = false, selectionControl, selected = false }: SortableHostProps) {
+export default function SortableHost({ host, onEdit, onDuplicate, onDataChanged, disabled = false, canUpdate = true, canCreate = true, selectionControl, selected = false }: SortableHostProps) {
   const { t } = useTranslation()
   const dir = useDirDetection()
   // Ensure host.id is not null before using it
@@ -30,7 +32,7 @@ export default function SortableHost({ host, onEdit, onDuplicate, onDataChanged,
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: host.id as UniqueIdentifier,
-    disabled: disabled,
+    disabled: disabled || !canUpdate,
   })
 
   const style = {
@@ -43,14 +45,19 @@ export default function SortableHost({ host, onEdit, onDuplicate, onDataChanged,
 
   return (
     <div ref={setNodeRef} className="cursor-default" style={style} {...attributes}>
-      <Card className={cn('group relative h-full cursor-pointer p-4 transition-colors hover:bg-accent', selected && 'border-primary/50 bg-accent/30')} onClick={() => onEdit(host)}>
+      <Card
+        className={cn('group relative h-full p-4 transition-colors', canUpdate && 'hover:bg-accent cursor-pointer', selected && 'border-primary/50 bg-accent/30')}
+        onClick={() => {
+          if (canUpdate) onEdit(host)
+        }}
+      >
         <div className="flex items-start gap-3">
           <button
             type="button"
-            style={{ cursor: disabled ? 'not-allowed' : cursor }}
-            className={cn('touch-none transition-opacity', disabled ? 'cursor-not-allowed opacity-30' : 'opacity-50 group-hover:opacity-100')}
-            {...(disabled ? {} : listeners)}
-            disabled={disabled}
+            style={{ cursor: disabled || !canUpdate ? 'not-allowed' : cursor }}
+            className={cn('touch-none transition-opacity', disabled || !canUpdate ? 'cursor-not-allowed opacity-30' : 'opacity-50 group-hover:opacity-100')}
+            {...(disabled || !canUpdate ? {} : listeners)}
+            disabled={disabled || !canUpdate}
           >
             <GripVertical className="h-5 w-5" />
             <span className="sr-only">Drag to reorder</span>
@@ -62,18 +69,18 @@ export default function SortableHost({ host, onEdit, onDuplicate, onDataChanged,
               <div className="truncate font-medium">{host.remark ?? ''}</div>
             </div>
             <div className={cn('flex items-center gap-1', dir === 'rtl' && 'justify-start')}>
-              <ChevronsLeftRightEllipsis className="h-4 w-4 text-muted-foreground" />
-              <div dir="ltr" className="truncate text-sm text-muted-foreground">
+              <ChevronsLeftRightEllipsis className="text-muted-foreground h-4 w-4" />
+              <div dir="ltr" className="text-muted-foreground truncate text-sm">
                 {Array.isArray(host.address) ? host.address[0] || '' : (host.address ?? '')}:{host.port === null ? <Settings className="inline h-3 w-3" /> : host.port}
               </div>
             </div>
-            <div className="flex items-center gap-1 truncate text-sm text-muted-foreground">
+            <div className="text-muted-foreground flex items-center gap-1 truncate text-sm">
               <CloudCog className="h-4 w-4" />
               <span>{t('inbound')}: </span>
               <span dir="ltr">{host.inbound_tag ?? ''}</span>
             </div>
           </div>
-          <HostActionsMenu host={host} onEdit={onEdit} onDuplicate={onDuplicate} onDataChanged={onDataChanged} />
+          <HostActionsMenu host={host} onEdit={onEdit} onDuplicate={onDuplicate} onDataChanged={onDataChanged} canUpdate={canUpdate} canCreate={canCreate} />
         </div>
       </Card>
     </div>

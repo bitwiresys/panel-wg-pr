@@ -1,23 +1,24 @@
+import asyncio
 import io
 import json
+import time
 import zipfile
 from base64 import b64encode
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from math import ceil
-import asyncio
-import time
-from urllib.parse import parse_qs, unquote, urlsplit
 from unittest.mock import AsyncMock, MagicMock
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from fastapi import status
 from sqlalchemy import func, select, update
 
 from app.db.crud.hwid import register_user_hwid
 from app.db.models import NodeUserUsage, User
-from app.models.stats import Period, UserCountMetric, UserCountMetricStat, UserCountMetricStatsList
 from app.models.settings import ConfigFormat, SubRule, Subscription
+from app.models.stats import Period, UserCountMetric, UserCountMetricStat, UserCountMetricStatsList
+from app.models.validators import MAX_ON_HOLD_EXPIRE_DURATION_SECONDS
 from app.operation.subscription import SubscriptionOperation
 from app.utils import jwt as jwt_utils
 from app.utils.crypto import generate_wireguard_keypair, get_wireguard_public_key
@@ -54,6 +55,24 @@ def cleanup_groups(access_token: str, core: dict, groups: list[dict]):
     for group in groups:
         delete_group(access_token, group["id"])
     delete_core(access_token, core["id"])
+
+
+def test_create_user_rejects_too_large_on_hold_expire_duration(access_token):
+    core, groups = setup_groups(access_token, 1)
+    try:
+        response = client.post(
+            "/api/user",
+            headers=auth_headers(access_token),
+            json={
+                "username": unique_name("too_large_on_hold"),
+                "status": "on_hold",
+                "group_ids": [groups[0]["id"]],
+                "on_hold_expire_duration": MAX_ON_HOLD_EXPIRE_DURATION_SECONDS + 1,
+            },
+        )
+        assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    finally:
+        cleanup_groups(access_token, core, groups)
 
 
 def set_user_online_at(username: str, online_at: datetime) -> None:
@@ -99,6 +118,52 @@ def _build_v2_subscription_token(user_id: int, secret: str) -> str:
     return data_b64 + sign
 
 
+def _create_limited_user_creator_role(access_token: str) -> dict:
+    response = client.post(
+        "/api/admin-role",
+        headers=auth_headers(access_token),
+        json={
+            "name": unique_name("bounded_user_creator"),
+            "permissions": {"users": {"create": True, "read": True, "update": True, "delete": True}},
+            "limits": {
+                "max_users": None,
+                "data_limit_min": None,
+                "data_limit_max": 10 * 1024 * 1024,
+                "expire_min": None,
+                "expire_max": 24 * 60 * 60,
+                "min_hwid_per_user": None,
+                "max_hwid_per_user": 3,
+            },
+            "features": {"can_use_reset_strategy": True, "can_use_next_plan": True},
+            "access": {"require_template": False, "allowed_template_ids": None, "allowed_group_ids": None},
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    return response.json()
+
+
+def _create_template_required_user_role(access_token: str, *, template_ids: list[int] | None = None) -> dict:
+    response = client.post(
+        "/api/admin-role",
+        headers=auth_headers(access_token),
+        json={
+            "name": unique_name("template_required_user_role"),
+            "permissions": {"users": {"create": True, "read": True, "update": True, "delete": True}},
+            "access": {
+                "require_template": True,
+                "allowed_template_ids": template_ids,
+                "allowed_group_ids": None,
+            },
+        },
+    )
+    assert response.status_code == status.HTTP_201_CREATED
+    return response.json()
+
+
+def _delete_role(access_token: str, role_id: int) -> None:
+    client.delete(f"/api/admin-role/{role_id}", headers=auth_headers(access_token))
+
+
 def test_subscription_token_generation_avoids_trailing_dash_or_underscore_and_keeps_v2_compatibility(monkeypatch):
     secret = "test-secret"
 
@@ -140,8 +205,8 @@ def test_user_create_active(access_token):
         assert user["data_limit"] == (1024 * 1024 * 1024 * 10)
         assert user["data_limit_reset_strategy"] == "no_reset"
         assert user["status"] == "active"
-        assert user["proxy_settings"]["wireguard"]["private_key"]
-        assert user["proxy_settings"]["wireguard"]["public_key"]
+        assert user["proxy_settings"]["wireguard"]["private_key"] is None
+        assert user["proxy_settings"]["wireguard"]["public_key"] is None
         assert set(user["group_ids"]) == set(group_ids)
         response_datetime = datetime.fromisoformat(user["expire"])
         expected_formatted = expire.replace(tzinfo=None).strftime("%Y-%m-%dT%H:%M:%S")
@@ -150,6 +215,95 @@ def test_user_create_active(access_token):
     finally:
         delete_user(access_token, user["username"])
         cleanup_groups(access_token, core, groups)
+
+
+def test_limited_admin_cannot_create_or_modify_user_to_unlimited_data_or_expire(access_token):
+    role = _create_limited_user_creator_role(access_token)
+    admin = create_admin(access_token, role_id=role["id"])
+    admin_token = _login(admin["username"], admin["password"])
+    username = unique_name("bounded_limit_user")
+    finite_expire = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=1)).isoformat()
+
+    try:
+        response = client.post(
+            "/api/user",
+            headers=auth_headers(admin_token),
+            json={
+                "username": unique_name("bounded_no_data"),
+                "proxy_settings": {},
+                "expire": finite_expire,
+                "data_limit": 0,
+                "data_limit_reset_strategy": "no_reset",
+                "status": "active",
+            },
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Data limit cannot be unlimited" in response.json()["detail"]
+
+        response = client.post(
+            "/api/user",
+            headers=auth_headers(admin_token),
+            json={
+                "username": unique_name("bounded_no_expire"),
+                "proxy_settings": {},
+                "expire": 0,
+                "data_limit": 1024 * 1024,
+                "data_limit_reset_strategy": "no_reset",
+                "status": "active",
+            },
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Expire cannot be unlimited" in response.json()["detail"]
+
+        response = client.post(
+            "/api/user",
+            headers=auth_headers(admin_token),
+            json={
+                "username": unique_name("bounded_no_hwid"),
+                "proxy_settings": {},
+                "expire": finite_expire,
+                "data_limit": 1024 * 1024,
+                "data_limit_reset_strategy": "no_reset",
+                "hwid_limit": 0,
+                "status": "active",
+            },
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "HWID limit cannot be unlimited" in response.json()["detail"]
+
+        response = client.post(
+            "/api/user",
+            headers=auth_headers(admin_token),
+            json={
+                "username": username,
+                "proxy_settings": {},
+                "expire": finite_expire,
+                "data_limit": 1024 * 1024,
+                "data_limit_reset_strategy": "no_reset",
+                "hwid_limit": 1,
+                "status": "active",
+            },
+        )
+        assert response.status_code == status.HTTP_201_CREATED
+
+        response = client.put(f"/api/user/{username}", headers=auth_headers(admin_token), json={"note": "allowed"})
+        assert response.status_code == status.HTTP_200_OK
+
+        response = client.put(f"/api/user/{username}", headers=auth_headers(admin_token), json={"data_limit": 0})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Data limit cannot be unlimited" in response.json()["detail"]
+
+        response = client.put(f"/api/user/{username}", headers=auth_headers(admin_token), json={"expire": 0})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Expire cannot be unlimited" in response.json()["detail"]
+
+        response = client.put(f"/api/user/{username}", headers=auth_headers(admin_token), json={"hwid_limit": 0})
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "HWID limit cannot be unlimited" in response.json()["detail"]
+    finally:
+        client.delete(f"/api/user/{username}", headers=auth_headers(access_token))
+        delete_admin(access_token, admin["username"])
+        _delete_role(access_token, role["id"])
 
 
 def test_user_create_expire_timezone_offset_normalized_to_utc(access_token):
@@ -521,8 +675,8 @@ def test_users_get_filters_by_no_expire(access_token):
 
 def test_users_get_filters_by_admin_ids(access_token):
     core, groups = setup_groups(access_token, 1)
-    admin_a = create_admin(access_token, is_sudo=False)
-    admin_b = create_admin(access_token, is_sudo=False)
+    admin_a = create_admin(access_token)
+    admin_b = create_admin(access_token)
     user_a = create_user(
         access_token,
         group_ids=[groups[0]["id"]],
@@ -715,11 +869,8 @@ def test_get_users_count_metric_passes_filters(access_token, monkeypatch):
     assert query.end == end
 
 
-def test_get_users_count_metric_rejects_status_metric_node_scope(access_token, monkeypatch):
-    operator = MagicMock()
-    operator.get_users_count_metric = AsyncMock()
-    monkeypatch.setattr("app.routers.user.user_operator", operator)
-
+def test_get_users_count_metric_rejects_status_metric_node_scope(access_token):
+    """validate_user_count_metric_scope is now enforced in the operation layer — test against real operation."""
     response = client.get(
         "/api/users/counts/expired",
         headers=auth_headers(access_token),
@@ -728,7 +879,6 @@ def test_get_users_count_metric_rejects_status_metric_node_scope(access_token, m
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert "Only online user counts" in response.json()["detail"]
-    operator.get_users_count_metric.assert_not_called()
 
 
 def test_subscription_url_new_token_and_legacy_compatibility(access_token):
@@ -996,7 +1146,7 @@ def test_wireguard_subscription_outputs_are_consistent(access_token):
         delete_core(access_token, core["id"])
 
 
-def test_wireguard_disabled_skips_peer_ip_allocation_and_subscription_outputs(access_token, monkeypatch):
+def test_wireguard_disabled_skips_peer_ip_allocation(access_token, monkeypatch):
     monkeypatch.setattr("config.wireguard_settings.enabled", False)
 
     interface_private_key, _ = generate_wireguard_keypair()
@@ -1032,16 +1182,14 @@ def test_wireguard_disabled_skips_peer_ip_allocation_and_subscription_outputs(ac
     user = create_user(access_token, group_ids=[group["id"]], payload={"username": unique_name("wg_disabled_user")})
 
     try:
-        assert user["proxy_settings"]["wireguard"]["private_key"]
-        assert user["proxy_settings"]["wireguard"]["public_key"]
+        assert user["proxy_settings"]["wireguard"]["private_key"] is None
+        assert user["proxy_settings"]["wireguard"]["public_key"] is None
         assert user["proxy_settings"]["wireguard"]["peer_ips"] == []
 
         links_response = client.get(f"{user['subscription_url']}/links")
-        wireguard_response = client.get(f"{user['subscription_url']}/wireguard")
 
         assert links_response.status_code == status.HTTP_200_OK
         assert "wireguard://" not in links_response.text
-        assert wireguard_response.status_code == status.HTTP_406_NOT_ACCEPTABLE
     finally:
         delete_user(access_token, user["username"])
         delete_group(access_token, group["id"])
@@ -1866,6 +2014,48 @@ def test_revoke_user_subscription(access_token):
         cleanup_groups(access_token, core, groups)
 
 
+def test_revoke_user_subscription_regenerates_wireguard_keys(access_token):
+    interface_private_key, _ = generate_wireguard_keypair()
+    interface_name = unique_name("wg_revoke")
+    core = create_core(
+        access_token,
+        name=unique_name("wireguard_revoke_core"),
+        config={
+            "interface_name": interface_name,
+            "private_key": interface_private_key,
+            "listen_port": 51820,
+            "address": ["10.45.0.1/24"],
+        },
+        type="wg",
+        fallbacks=[],
+    )
+    group = create_group(access_token, name=unique_name("wg_revoke_group"), inbound_tags=[interface_name])
+    user = create_user(access_token, group_ids=[group["id"]], payload={"username": unique_name("wg_revoke_user")})
+    old_wireguard = user["proxy_settings"]["wireguard"]
+
+    try:
+        assert old_wireguard["private_key"]
+        assert old_wireguard["public_key"] == get_wireguard_public_key(old_wireguard["private_key"])
+        assert old_wireguard["peer_ips"]
+
+        response = client.post(
+            f"/api/user/{user['username']}/revoke_sub",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        wireguard = response.json()["proxy_settings"]["wireguard"]
+        assert wireguard["private_key"]
+        assert wireguard["public_key"] == get_wireguard_public_key(wireguard["private_key"])
+        assert wireguard["private_key"] != old_wireguard["private_key"]
+        assert wireguard["public_key"] != old_wireguard["public_key"]
+        assert wireguard["peer_ips"] == old_wireguard["peer_ips"]
+    finally:
+        delete_user(access_token, user["username"])
+        delete_group(access_token, group["id"])
+        delete_core(access_token, core["id"])
+
+
 def test_user_delete(access_token):
     """Test that the user delete route is accessible."""
     core, groups = setup_groups(access_token, 1)
@@ -1905,6 +2095,49 @@ def test_create_user_with_template(access_token):
         cleanup_groups(access_token, core, groups)
 
 
+def test_role_requiring_template_cannot_manually_create_user(access_token):
+    core, groups = setup_groups(access_token, 1)
+    template = create_user_template(access_token, group_ids=[groups[0]["id"]])
+    role = _create_template_required_user_role(access_token, template_ids=[template["id"]])
+    admin = create_admin(access_token, role_id=role["id"])
+    admin_token = _login(admin["username"], admin["password"])
+    manual_username = unique_name("manual_template_required")
+    template_username = unique_name("template_required")
+    template_user_created = False
+
+    try:
+        manual_response = client.post(
+            "/api/user",
+            headers=auth_headers(admin_token),
+            json={
+                "username": manual_username,
+                "proxy_settings": {},
+                "data_limit": 1024 * 1024,
+                "data_limit_reset_strategy": "no_reset",
+                "status": "active",
+                "group_ids": [groups[0]["id"]],
+            },
+        )
+        assert manual_response.status_code == status.HTTP_403_FORBIDDEN
+        assert manual_response.json()["detail"] == "Manual user create/modify is not allowed for your role"
+
+        template_response = client.post(
+            "/api/user/from_template",
+            headers=auth_headers(admin_token),
+            json={"username": template_username, "user_template_id": template["id"]},
+        )
+        assert template_response.status_code == status.HTTP_201_CREATED
+        assert template_response.json()["username"] == template_username
+        template_user_created = True
+    finally:
+        if template_user_created:
+            delete_user(access_token, template_username)
+        delete_admin(access_token, admin["username"])
+        _delete_role(access_token, role["id"])
+        delete_user_template(access_token, template["id"])
+        cleanup_groups(access_token, core, groups)
+
+
 def test_modify_user_with_template(access_token):
     core, groups = setup_groups(access_token, 1)
     template = create_user_template(access_token, group_ids=[groups[0]["id"]])
@@ -1927,6 +2160,152 @@ def test_modify_user_with_template(access_token):
     finally:
         delete_user(access_token, username)
         delete_user_template(access_token, template["id"])
+        cleanup_groups(access_token, core, groups)
+
+
+def test_role_requiring_template_cannot_manually_modify_user(access_token):
+    core, groups = setup_groups(access_token, 1)
+    template = create_user_template(access_token, group_ids=[groups[0]["id"]])
+    role = _create_template_required_user_role(access_token, template_ids=[template["id"]])
+    admin = create_admin(access_token, role_id=role["id"])
+    admin_token = _login(admin["username"], admin["password"])
+    user = create_user(access_token, group_ids=[groups[0]["id"]], payload={"username": unique_name("tmpl_req_mod")})
+
+    try:
+        manual_response = client.put(
+            f"/api/user/{user['username']}",
+            headers=auth_headers(admin_token),
+            json={"data_limit": 2 * 1024 * 1024},
+        )
+        assert manual_response.status_code == status.HTTP_403_FORBIDDEN
+        assert manual_response.json()["detail"] == "Manual user create/modify is not allowed for your role"
+
+        template_response = client.put(
+            f"/api/user/from_template/{user['username']}",
+            headers=auth_headers(admin_token),
+            json={"user_template_id": template["id"]},
+        )
+        assert template_response.status_code == status.HTTP_200_OK
+        assert template_response.json()["data_limit"] == template["data_limit"]
+        assert template_response.json()["status"] == template["status"]
+    finally:
+        delete_user(access_token, user["username"])
+        delete_admin(access_token, admin["username"])
+        _delete_role(access_token, role["id"])
+        delete_user_template(access_token, template["id"])
+        cleanup_groups(access_token, core, groups)
+
+
+def test_template_required_admin_can_toggle_user_disabled_status(access_token):
+    core, groups = setup_groups(access_token, 1)
+    template = create_user_template(access_token, group_ids=[groups[0]["id"]])
+    role = _create_template_required_user_role(access_token, template_ids=[template["id"]])
+    admin = create_admin(access_token, role_id=role["id"])
+    admin_token = _login(admin["username"], admin["password"])
+    username = unique_name("tmpl_req_toggle")
+    user_created = False
+
+    try:
+        create_response = client.post(
+            "/api/user/from_template",
+            headers=auth_headers(admin_token),
+            json={"username": username, "user_template_id": template["id"]},
+        )
+        assert create_response.status_code == status.HTTP_201_CREATED
+        user_created = True
+
+        manual_response = client.put(
+            f"/api/user/{username}",
+            headers=auth_headers(admin_token),
+            json={"data_limit": 2 * 1024 * 1024},
+        )
+        assert manual_response.status_code == status.HTTP_403_FORBIDDEN
+
+        disable_response = client.put(
+            f"/api/user/by-id/{create_response.json()['id']}/disabled",
+            headers=auth_headers(admin_token),
+            json={"disabled": True},
+        )
+        assert disable_response.status_code == status.HTTP_200_OK
+        assert disable_response.json()["status"] == "disabled"
+
+        enable_response = client.put(
+            f"/api/user/by-id/{create_response.json()['id']}/disabled",
+            headers=auth_headers(admin_token),
+            json={"disabled": False},
+        )
+        assert enable_response.status_code == status.HTTP_200_OK
+        assert enable_response.json()["status"] == "active"
+    finally:
+        if user_created:
+            delete_user(access_token, username)
+        delete_admin(access_token, admin["username"])
+        _delete_role(access_token, role["id"])
+        delete_user_template(access_token, template["id"])
+        cleanup_groups(access_token, core, groups)
+
+
+def test_enable_disabled_user_resolves_expired_limited_on_hold_and_active_status(access_token):
+    core, groups = setup_groups(access_token, 1)
+    expired_user = create_user(
+        access_token,
+        group_ids=[groups[0]["id"]],
+        payload={
+            "username": unique_name("toggle_expired"),
+            "expire": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
+        },
+    )
+    limited_user = create_user(
+        access_token,
+        group_ids=[groups[0]["id"]],
+        payload={"username": unique_name("toggle_limited"), "data_limit": 100},
+    )
+    on_hold_user = create_user(
+        access_token,
+        group_ids=[groups[0]["id"]],
+        payload={"username": unique_name("toggle_on_hold"), "status": "on_hold", "on_hold_expire_duration": 3600},
+    )
+    active_user = create_user(
+        access_token,
+        group_ids=[groups[0]["id"]],
+        payload={"username": unique_name("toggle_active")},
+    )
+    users = [expired_user, limited_user, on_hold_user, active_user]
+
+    async def _seed_limited_usage():
+        async with TestSession() as session:
+            await session.execute(update(User).where(User.id == limited_user["id"]).values(used_traffic=100))
+            await session.commit()
+
+    try:
+        asyncio.run(_seed_limited_usage())
+
+        expected_statuses = {
+            expired_user["id"]: "expired",
+            limited_user["id"]: "limited",
+            on_hold_user["id"]: "on_hold",
+            active_user["id"]: "active",
+        }
+
+        for user in users:
+            disable_response = client.put(
+                f"/api/user/by-id/{user['id']}/disabled",
+                headers=auth_headers(access_token),
+                json={"disabled": True},
+            )
+            assert disable_response.status_code == status.HTTP_200_OK
+            assert disable_response.json()["status"] == "disabled"
+
+            enable_response = client.put(
+                f"/api/user/by-id/{user['id']}/disabled",
+                headers=auth_headers(access_token),
+                json={"disabled": False},
+            )
+            assert enable_response.status_code == status.HTTP_200_OK
+            assert enable_response.json()["status"] == expected_statuses[user["id"]]
+    finally:
+        for user in users:
+            delete_user(access_token, user["username"])
         cleanup_groups(access_token, core, groups)
 
 
@@ -2625,3 +3004,127 @@ def test_wireguard_rejects_manual_peer_ip_outside_global_pool(access_token):
         delete_group(access_token, group["id"])
         client.delete(f"/api/host/{host_id}", headers=auth_headers(access_token))
         delete_core(access_token, core["id"])
+
+
+# ---------------------------------------------------------------------------
+# RBAC scope tests for user operation functions
+# ---------------------------------------------------------------------------
+
+
+def _login(username: str, password: str) -> str:
+    """Log in and return the access token."""
+    response = client.post(
+        "/api/admin/token",
+        data={"username": username, "password": password, "grant_type": "password"},
+    )
+    assert response.status_code == status.HTTP_200_OK
+    return response.json()["access_token"]
+
+
+def test_get_users_scope_own_filters_to_own_users(access_token):
+    """Operator (scope=own) only sees their own users in GET /api/users."""
+    operator = create_admin(access_token, role_id=3)
+    try:
+        op_token = _login(operator["username"], operator["password"])
+        # Create a user owned by the operator
+        own_user = create_user(op_token, payload={"username": unique_name("scope_own_user")})
+        # Create a user owned by the owner (testadmin)
+        other_user = create_user(access_token, payload={"username": unique_name("scope_other_user")})
+        try:
+            response = client.get("/api/users", headers=auth_headers(op_token))
+            assert response.status_code == status.HTTP_200_OK
+            usernames = [u["username"] for u in response.json()["users"]]
+            assert own_user["username"] in usernames
+            assert other_user["username"] not in usernames
+        finally:
+            delete_user(op_token, own_user["username"])
+            delete_user(access_token, other_user["username"])
+    finally:
+        delete_admin(access_token, operator["username"])
+
+
+def test_get_users_simple_scope_own_filters_to_own_users(access_token):
+    """Operator (scope=own) only sees their own users in GET /api/users/simple."""
+    operator = create_admin(access_token, role_id=3)
+    try:
+        op_token = _login(operator["username"], operator["password"])
+        own_user = create_user(op_token, payload={"username": unique_name("simple_own_user")})
+        other_user = create_user(access_token, payload={"username": unique_name("simple_other_user")})
+        try:
+            response = client.get("/api/users/simple", headers=auth_headers(op_token))
+            assert response.status_code == status.HTTP_200_OK
+            usernames = [u["username"] for u in response.json()["users"]]
+            assert own_user["username"] in usernames
+            assert other_user["username"] not in usernames
+        finally:
+            delete_user(op_token, own_user["username"])
+            delete_user(access_token, other_user["username"])
+    finally:
+        delete_admin(access_token, operator["username"])
+
+
+def test_get_users_count_metric_node_scope_stripped_for_operator(access_token):
+    """Operator without nodes.stats cannot use node_id filter — it is silently stripped."""
+    operator = create_admin(access_token, role_id=3)
+    try:
+        op_token = _login(operator["username"], operator["password"])
+        # node_id=999 would fail validate_user_count_metric_scope if passed through,
+        # but operator lacks nodes.stats so node_id is stripped → valid request
+        response = client.get(
+            "/api/users/counts/expired",
+            headers=auth_headers(op_token),
+            params={"period": "day", "node_id": "999"},
+        )
+        # Should succeed (node_id stripped) rather than 400
+        assert response.status_code == status.HTTP_200_OK
+    finally:
+        delete_admin(access_token, operator["username"])
+
+
+def test_get_users_sub_update_chart_other_admin_requires_admins_read(access_token):
+    """An operator cannot view another admin's subscription chart — requires admins.read."""
+    operator = create_admin(access_token, role_id=3)
+    other_admin = create_admin(access_token, role_id=3)
+    try:
+        op_token = _login(operator["username"], operator["password"])
+        response = client.get(
+            "/api/users/sub_update/chart",
+            headers=auth_headers(op_token),
+            params={"admin_id": other_admin["id"]},
+        )
+        assert response.status_code == status.HTTP_403_FORBIDDEN
+    finally:
+        delete_admin(access_token, operator["username"])
+        delete_admin(access_token, other_admin["username"])
+
+
+def test_get_users_sub_update_chart_administrator_can_view_other_admin(access_token):
+    """Administrator (admins.read) can view another admin's subscription chart."""
+    administrator = create_admin(access_token, role_id=2)
+    other_admin = create_admin(access_token, role_id=3)
+    try:
+        admin_token = _login(administrator["username"], administrator["password"])
+        response = client.get(
+            "/api/users/sub_update/chart",
+            headers=auth_headers(admin_token),
+            params={"admin_id": other_admin["id"]},
+        )
+        assert response.status_code == status.HTTP_200_OK
+    finally:
+        delete_admin(access_token, administrator["username"])
+        delete_admin(access_token, other_admin["username"])
+
+
+def test_get_users_sub_update_chart_operator_can_view_own(access_token):
+    """Operator can always view their own subscription chart."""
+    operator = create_admin(access_token, role_id=3)
+    try:
+        op_token = _login(operator["username"], operator["password"])
+        response = client.get(
+            "/api/users/sub_update/chart",
+            headers=auth_headers(op_token),
+            params={"admin_id": operator["id"]},
+        )
+        assert response.status_code == status.HTTP_200_OK
+    finally:
+        delete_admin(access_token, operator["username"])

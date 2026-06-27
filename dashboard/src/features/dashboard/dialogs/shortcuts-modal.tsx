@@ -23,25 +23,51 @@ interface QuickActionsModalProps {
   onCreateAdmin?: () => void
   onCreateTemplate?: () => void
   onCreateCore?: () => void
-  isSudo?: boolean
+  canCreateUser?: boolean
+  canCreateGroup?: boolean
+  canCreateHost?: boolean
+  canCreateNode?: boolean
+  canCreateAdmin?: boolean
+  canCreateTemplate?: boolean
+  canCreateCore?: boolean
 }
 
-const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreateHost, onCreateNode, onCreateAdmin, onCreateTemplate, onCreateCore, isSudo = false }: QuickActionsModalProps) => {
+const QuickActionsModal = ({
+  open,
+  onClose,
+  onCreateUser,
+  onCreateGroup,
+  onCreateHost,
+  onCreateNode,
+  onCreateAdmin,
+  onCreateTemplate,
+  onCreateCore,
+  canCreateUser = false,
+  canCreateGroup = false,
+  canCreateHost = false,
+  canCreateNode = false,
+  canCreateAdmin = false,
+  canCreateTemplate = false,
+  canCreateCore = false,
+}: QuickActionsModalProps) => {
   const { t } = useTranslation()
 
   const quickActions: QuickAction[] = [
     // User Management
-    {
-      id: '1',
-      name: t('createUser'),
-      description: t('emptyState.noUsers.description', { defaultValue: 'Get started by creating your first user account' }),
-      icon: <UsersIcon className="h-5 w-5" />,
-      action: onCreateUser,
-      disabled: false,
-      category: 'users' as const,
-    },
-    // Only show these actions for sudo admins
-    ...(isSudo
+    ...(canCreateUser
+      ? [
+          {
+            id: '1',
+            name: t('createUser'),
+            description: t('emptyState.noUsers.description', { defaultValue: 'Get started by creating your first user account' }),
+            icon: <UsersIcon className="h-5 w-5" />,
+            action: onCreateUser,
+            disabled: false,
+            category: 'users' as const,
+          },
+        ]
+      : []),
+    ...(canCreateGroup
       ? [
           {
             id: '2',
@@ -52,6 +78,10 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
             disabled: false,
             category: 'users' as const,
           },
+        ]
+      : []),
+    ...(canCreateTemplate
+      ? [
           {
             id: '3',
             name: t('templates.addTemplate'),
@@ -61,6 +91,10 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
             disabled: !onCreateTemplate,
             category: 'users' as const,
           },
+        ]
+      : []),
+    ...(canCreateHost
+      ? [
           {
             id: '4',
             name: t('hostsDialog.addHost'),
@@ -70,6 +104,10 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
             disabled: false,
             category: 'system' as const,
           },
+        ]
+      : []),
+    ...(canCreateNode
+      ? [
           {
             id: '5',
             name: t('nodes.addNode'),
@@ -79,6 +117,10 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
             disabled: false,
             category: 'system' as const,
           },
+        ]
+      : []),
+    ...(canCreateCore
+      ? [
           {
             id: '6',
             name: t('coreConfigModal.addConfig'),
@@ -88,7 +130,10 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
             disabled: !onCreateCore,
             category: 'system' as const,
           },
-          // Admin Management
+        ]
+      : []),
+    ...(canCreateAdmin
+      ? [
           {
             id: '7',
             name: t('admins.createAdmin'),
@@ -132,7 +177,7 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
         <div className="max-h-[calc(100dvh-100px)] space-y-4 overflow-y-auto pr-1">
           {Object.entries(groupedActions).map(([category, actions]) => (
             <div key={category} className="space-y-2">
-              <div className="flex items-center gap-2 px-1 text-sm font-medium text-muted-foreground">
+              <div className="text-muted-foreground flex items-center gap-2 px-1 text-sm font-medium">
                 {categories[category as keyof typeof categories]?.icon}
                 {categories[category as keyof typeof categories]?.title}
               </div>
@@ -151,12 +196,12 @@ const QuickActionsModal = ({ open, onClose, onCreateUser, onCreateGroup, onCreat
                   >
                     <CardHeader className="px-3 py-3 pb-2">
                       <div className="flex items-center gap-3">
-                        <div className="rounded-md bg-muted p-1.5 text-muted-foreground">{action.icon}</div>
+                        <div className="bg-muted text-muted-foreground rounded-md p-1.5">{action.icon}</div>
                         <div className="min-w-0 flex-1">
                           <CardTitle className="truncate text-sm font-medium">{action.name}</CardTitle>
                           <CardDescription className="line-clamp-1 text-xs">{action.description}</CardDescription>
                         </div>
-                        {action.disabled && <div className="rounded bg-muted px-2 py-0.5 text-center text-xs text-muted-foreground">{t('quickActions.comingSoon')}</div>}
+                        {action.disabled && <div className="bg-muted text-muted-foreground rounded px-2 py-0.5 text-center text-xs">{t('quickActions.comingSoon')}</div>}
                       </div>
                     </CardHeader>
                   </Card>

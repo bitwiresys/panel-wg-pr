@@ -45,6 +45,7 @@ import { BulkActionItem, BulkActionsBar } from '@/features/users/components/bulk
 import { BulkActionAlertDialog } from '@/features/users/components/bulk-action-alert-dialog'
 import { Card, CardContent } from '@/components/ui/card'
 import { removeUsersFromUsersCache } from '@/utils/usersCache'
+import { hasPermission, hasScopeAll } from '@/utils/rbac'
 
 // Helper function to get URL search params from hash
 const getSearchParams = (): URLSearchParams => {
@@ -58,7 +59,11 @@ const getSearchParams = (): URLSearchParams => {
 const updateURLParams = (params: URLSearchParams) => {
   const hash = window.location.hash
   const hashPath = hash.split('?')[0]
-  const newHash = params.toString() ? `${hashPath}?${params.toString()}` : hashPath
+  const query = Array.from(params.entries())
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&')
+  const newHash = query ? `${hashPath}?${query}` : hashPath
+  if (hash === newHash) return
   window.history.replaceState(null, '', newHash)
 }
 
@@ -71,6 +76,22 @@ const parseOptionalPositiveNumber = (value: string | null) => {
 const parseOptionalDateString = (value: string | null) => {
   if (!value) return undefined
   return Number.isNaN(Date.parse(value)) ? undefined : value
+}
+
+const parseIdsParam = (values: string[]) => {
+  const ids = values
+    .flatMap(value => value.split(/[,\s]+/))
+    .map(value => Number(value.trim()))
+    .filter(value => Number.isInteger(value) && value > 0)
+
+  return ids.length > 0 ? Array.from(new Set(ids)) : undefined
+}
+
+const formatIdsInput = (ids: number[] | null | undefined) => ids?.join(', ') || ''
+
+const parseIdsInput = (value: string | null | undefined) => {
+  if (!value?.trim()) return undefined
+  return parseIdsParam([value])
 }
 
 const toOptionalBytesFilter = (gigabytes: number | undefined) => {
@@ -88,6 +109,8 @@ const parseURLParams = (searchParams: URLSearchParams, defaultItemsPerPage: numb
   const limit = parseInt(searchParams.get('limit') || defaultItemsPerPage.toString(), 10)
   const sort = searchParams.get('sort') || '-created_at'
   const search = searchParams.get('search') || undefined
+  const isId = searchParams.get('is_id') === 'true'
+  const ids = isId ? parseIdsParam(search ? [search] : searchParams.getAll('ids')) : parseIdsParam(searchParams.getAll('ids'))
   const statusParam = searchParams.get('status')
   const validStatuses: UserStatus[] = ['active', 'disabled', 'limited', 'expired', 'on_hold']
   const status = statusParam && validStatuses.includes(statusParam as UserStatus) ? (statusParam as UserStatus) : undefined
@@ -111,11 +134,13 @@ const parseURLParams = (searchParams: URLSearchParams, defaultItemsPerPage: numb
     page: Math.max(0, page),
     limit: limit > 0 ? limit : defaultItemsPerPage,
     sort,
-    search,
+    search: isId ? undefined : search,
+    ids,
     status,
     admin: admin.length > 0 ? admin : undefined,
     group: group.length > 0 ? group : undefined,
     isProtocol,
+    isId,
     dataLimitMin: noDataLimit ? undefined : dataLimitMin,
     dataLimitMax: noDataLimit ? undefined : dataLimitMax,
     expireAfter: noExpire ? undefined : expireAfter,
@@ -136,7 +161,11 @@ const UsersTable = memo(() => {
   const isAutoRefreshingRef = useRef(false)
   const isInitializingFromURLRef = useRef(false)
   const { admin } = useAdmin()
-  const isSudo = admin?.is_sudo || false
+  const canReadAllUsers = hasScopeAll(admin, 'users', 'read')
+  const canUpdateUsers = hasPermission(admin, 'users', 'update')
+  const canUpdateAllUsers = hasScopeAll(admin, 'users', 'update')
+  const canDeleteUsers = hasPermission(admin, 'users', 'delete')
+  const canBulkMutateUsers = canUpdateUsers || canDeleteUsers
 
   // Initialize from URL params on mount
   const getInitialStateFromURL = () => {
@@ -151,9 +180,11 @@ const UsersTable = memo(() => {
         sort: urlParams.sort,
         load_sub: true,
         offset: urlParams.page * urlParams.limit,
-        search: urlParams.isProtocol ? undefined : urlParams.search,
+        ids: urlParams.ids,
+        search: urlParams.isProtocol || urlParams.isId ? undefined : urlParams.search,
         proxy_id: urlParams.isProtocol && urlParams.search ? urlParams.search : undefined,
         is_protocol: urlParams.isProtocol,
+        is_id: urlParams.isId,
         status: urlParams.status || undefined,
         admin: urlParams.admin,
         group: urlParams.group,
@@ -194,9 +225,11 @@ const UsersTable = memo(() => {
     sort: string
     load_sub: boolean
     offset: number
+    ids?: number[]
     search?: string
     proxy_id?: string
     is_protocol: boolean
+    is_id: boolean
     status?: UserStatus | null
     admin?: string[]
     group?: number[]
@@ -242,6 +275,10 @@ const UsersTable = memo(() => {
       searchParams.set('search', filters.proxy_id)
       searchParams.set('is_protocol', 'true')
     }
+    if (filters.ids && filters.ids.length > 0) {
+      searchParams.set('search', formatIdsInput(filters.ids))
+      searchParams.set('is_id', 'true')
+    }
     if (filters.status) {
       searchParams.set('status', filters.status)
     }
@@ -279,7 +316,28 @@ const UsersTable = memo(() => {
       searchParams.set('no_expire', 'true')
     }
     updateURLParams(searchParams)
-  }, [currentPage, itemsPerPage, filters.sort, filters.search, filters.proxy_id, filters.is_protocol, filters.status, filters.admin, filters.group, filters.data_limit_min, filters.data_limit_max, filters.expire_after, filters.expire_before, filters.online_after, filters.online_before, filters.online, filters.no_data_limit, filters.no_expire])
+  }, [
+    currentPage,
+    itemsPerPage,
+    filters.sort,
+    filters.search,
+    filters.proxy_id,
+    filters.is_protocol,
+    filters.is_id,
+    filters.ids,
+    filters.status,
+    filters.admin,
+    filters.group,
+    filters.data_limit_min,
+    filters.data_limit_max,
+    filters.expire_after,
+    filters.expire_before,
+    filters.online_after,
+    filters.online_before,
+    filters.online,
+    filters.no_data_limit,
+    filters.no_expire,
+  ])
 
   // Initialize advance search form from URL params
   const getInitialAdvanceSearchValues = (): AdvanceSearchFormValue => {
@@ -287,7 +345,8 @@ const UsersTable = memo(() => {
     const urlParams = parseURLParams(searchParams, getUsersPerPageLimitSize())
 
     return {
-      is_username: !urlParams.isProtocol,
+      is_username: !urlParams.isProtocol && !urlParams.isId,
+      is_id: urlParams.isId,
       is_protocol: urlParams.isProtocol,
       show_created_by: getUsersShowCreatedBy(),
       show_selection_checkbox: getUsersShowSelectionCheckbox(),
@@ -315,7 +374,7 @@ const UsersTable = memo(() => {
       username: selectedUser?.username,
       status: selectedUser?.status === 'active' || selectedUser?.status === 'on_hold' || selectedUser?.status === 'disabled' ? selectedUser?.status : 'active',
       data_limit: selectedUser?.data_limit ? bytesToFormGigabytes(Number(selectedUser.data_limit)) : undefined,
-      hwid_limit: selectedUser?.hwid_limit ?? undefined,
+      hwid_limit: selectedUser?.hwid_limit ?? null,
       expire: normalizeDatePickerValueForEditForm(selectedUser?.expire),
       note: selectedUser?.note || '',
       data_limit_reset_strategy: selectedUser?.data_limit_reset_strategy || undefined,
@@ -325,11 +384,11 @@ const UsersTable = memo(() => {
       proxy_settings: selectedUser?.proxy_settings || undefined,
       next_plan: selectedUser?.next_plan
         ? {
-          user_template_id: selectedUser?.next_plan.user_template_id ? Number(selectedUser?.next_plan.user_template_id) : undefined,
-          data_limit: selectedUser?.next_plan.data_limit ? Math.round(Number(selectedUser?.next_plan.data_limit)) : undefined,
-          expire: selectedUser?.next_plan.expire ? Math.round(Number(selectedUser?.next_plan.expire)) : undefined,
-          add_remaining_traffic: selectedUser?.next_plan.add_remaining_traffic || false,
-        }
+            user_template_id: selectedUser?.next_plan.user_template_id ? Number(selectedUser?.next_plan.user_template_id) : undefined,
+            data_limit: selectedUser?.next_plan.data_limit ? Math.round(Number(selectedUser?.next_plan.data_limit)) : undefined,
+            expire: selectedUser?.next_plan.expire ? Math.round(Number(selectedUser?.next_plan.expire)) : undefined,
+            add_remaining_traffic: selectedUser?.next_plan.add_remaining_traffic || false,
+          }
         : undefined,
     },
   })
@@ -340,7 +399,7 @@ const UsersTable = memo(() => {
         username: selectedUser.username,
         status: selectedUser.status === 'active' || selectedUser.status === 'on_hold' || selectedUser.status === 'disabled' ? selectedUser.status : 'active',
         data_limit: selectedUser.data_limit ? bytesToFormGigabytes(Number(selectedUser.data_limit)) : 0,
-        hwid_limit: selectedUser.hwid_limit ?? undefined,
+        hwid_limit: selectedUser.hwid_limit ?? null,
         expire: normalizeDatePickerValueForEditForm(selectedUser.expire),
         note: selectedUser.note || '',
         data_limit_reset_strategy: selectedUser.data_limit_reset_strategy || undefined,
@@ -350,11 +409,11 @@ const UsersTable = memo(() => {
         proxy_settings: selectedUser.proxy_settings || undefined,
         next_plan: selectedUser.next_plan
           ? {
-            user_template_id: selectedUser.next_plan.user_template_id ? Number(selectedUser.next_plan.user_template_id) : undefined,
-            data_limit: selectedUser.next_plan.data_limit ? Math.round(Number(selectedUser.next_plan.data_limit)) : undefined,
-            expire: selectedUser.next_plan.expire ? Math.round(Number(selectedUser.next_plan.expire)) : undefined,
-            add_remaining_traffic: selectedUser.next_plan.add_remaining_traffic || false,
-          }
+              user_template_id: selectedUser.next_plan.user_template_id ? Number(selectedUser.next_plan.user_template_id) : undefined,
+              data_limit: selectedUser.next_plan.data_limit ? Math.round(Number(selectedUser.next_plan.data_limit)) : undefined,
+              expire: selectedUser.next_plan.expire ? Math.round(Number(selectedUser.next_plan.expire)) : undefined,
+              add_remaining_traffic: selectedUser.next_plan.add_remaining_traffic || false,
+            }
           : undefined,
       }
       userForm.reset(values)
@@ -362,11 +421,15 @@ const UsersTable = memo(() => {
   }, [selectedUser, userForm])
 
   useEffect(() => {
-    setFilters(prev => ({
-      ...prev,
-      limit: itemsPerPage,
-      offset: currentPage * itemsPerPage,
-    }))
+    setFilters(prev => {
+      const nextOffset = currentPage * itemsPerPage
+      if (prev.limit === itemsPerPage && prev.offset === nextOffset) return prev
+      return {
+        ...prev,
+        limit: itemsPerPage,
+        offset: nextOffset,
+      }
+    })
   }, [currentPage, itemsPerPage])
 
   useEffect(() => {
@@ -374,8 +437,9 @@ const UsersTable = memo(() => {
       advanceSearchForm.setValue('status', filters.status || '0')
       advanceSearchForm.setValue('admin', filters.admin || [])
       advanceSearchForm.setValue('group', filters.group || [])
+      advanceSearchForm.setValue('is_id', Boolean(filters.ids?.length || filters.is_id))
       advanceSearchForm.setValue('is_protocol', Boolean(filters.proxy_id || filters.is_protocol))
-      advanceSearchForm.setValue('is_username', !Boolean(filters.proxy_id || filters.is_protocol))
+      advanceSearchForm.setValue('is_username', !Boolean(filters.proxy_id || filters.is_protocol || filters.ids?.length || filters.is_id))
       advanceSearchForm.setValue('show_created_by', showCreatedBy)
       advanceSearchForm.setValue('show_selection_checkbox', showSelectionCheckbox)
       advanceSearchForm.setValue('no_data_limit', Boolean(filters.no_data_limit))
@@ -388,7 +452,28 @@ const UsersTable = memo(() => {
       advanceSearchForm.setValue('online_before', filters.online_before ? new Date(filters.online_before) : undefined)
       advanceSearchForm.setValue('online', Boolean(filters.online))
     }
-  }, [isAdvanceSearchOpen, filters.status, filters.admin, filters.group, filters.proxy_id, filters.is_protocol, filters.data_limit_min, filters.data_limit_max, filters.expire_after, filters.expire_before, filters.online_after, filters.online_before, filters.online, filters.no_data_limit, filters.no_expire, showCreatedBy, showSelectionCheckbox, advanceSearchForm])
+  }, [
+    isAdvanceSearchOpen,
+    filters.status,
+    filters.ids,
+    filters.admin,
+    filters.group,
+    filters.proxy_id,
+    filters.is_protocol,
+    filters.is_id,
+    filters.data_limit_min,
+    filters.data_limit_max,
+    filters.expire_after,
+    filters.expire_before,
+    filters.online_after,
+    filters.online_before,
+    filters.online,
+    filters.no_data_limit,
+    filters.no_expire,
+    showCreatedBy,
+    showSelectionCheckbox,
+    advanceSearchForm,
+  ])
 
   const {
     data: usersData,
@@ -422,14 +507,21 @@ const UsersTable = memo(() => {
       if (urlParams.sort !== filters.sort) {
         setFilters(prev => ({ ...prev, sort: urlParams.sort }))
       }
-      const currentSearch = filters.proxy_id || filters.search
+      const currentSearch = filters.proxy_id || filters.search || formatIdsInput(filters.ids)
       const nextIsProtocol = Boolean(urlParams.isProtocol && urlParams.search)
-      if (urlParams.search !== currentSearch || nextIsProtocol !== filters.is_protocol) {
+      const nextIsId = Boolean(urlParams.isId && urlParams.ids?.length)
+      const nextSearch = nextIsId ? formatIdsInput(urlParams.ids) : urlParams.search
+      if (nextSearch !== currentSearch || nextIsProtocol !== filters.is_protocol || nextIsId !== filters.is_id) {
         if (nextIsProtocol) {
-          setFilters(prev => ({ ...prev, proxy_id: urlParams.search, search: undefined, is_protocol: true }))
+          setFilters(prev => ({ ...prev, proxy_id: urlParams.search, search: undefined, ids: undefined, is_protocol: true, is_id: false }))
+        } else if (nextIsId) {
+          setFilters(prev => ({ ...prev, ids: urlParams.ids, search: undefined, proxy_id: undefined, is_protocol: false, is_id: true }))
         } else {
-          setFilters(prev => ({ ...prev, search: urlParams.search, proxy_id: undefined, is_protocol: false }))
+          setFilters(prev => ({ ...prev, search: urlParams.search, proxy_id: undefined, ids: undefined, is_protocol: false, is_id: false }))
         }
+      }
+      if (!nextIsId && JSON.stringify(urlParams.ids) !== JSON.stringify(filters.ids)) {
+        setFilters(prev => ({ ...prev, ids: urlParams.ids }))
       }
       if (urlParams.status !== filters.status) {
         setFilters(prev => ({ ...prev, status: urlParams.status }))
@@ -476,7 +568,28 @@ const UsersTable = memo(() => {
 
     window.addEventListener('hashchange', handleHashChange)
     return () => window.removeEventListener('hashchange', handleHashChange)
-  }, [currentPage, itemsPerPage, filters.sort, filters.search, filters.proxy_id, filters.is_protocol, filters.status, filters.admin, filters.group, filters.data_limit_min, filters.data_limit_max, filters.expire_after, filters.expire_before, filters.online_after, filters.online_before, filters.online, filters.no_data_limit, filters.no_expire])
+  }, [
+    currentPage,
+    itemsPerPage,
+    filters.sort,
+    filters.search,
+    filters.proxy_id,
+    filters.is_protocol,
+    filters.is_id,
+    filters.ids,
+    filters.status,
+    filters.admin,
+    filters.group,
+    filters.data_limit_min,
+    filters.data_limit_max,
+    filters.expire_after,
+    filters.expire_before,
+    filters.online_after,
+    filters.online_before,
+    filters.online,
+    filters.no_data_limit,
+    filters.no_expire,
+  ])
 
   useEffect(() => {
     if (usersData && isFirstLoadRef.current) {
@@ -554,44 +667,49 @@ const UsersTable = memo(() => {
     [advanceSearchForm],
   )
 
-  const handleFilterChange = useCallback(
-    (newFilters: Partial<typeof filters>) => {
-      setFilters(prev => {
-        let updated = { ...prev, ...newFilters }
-        if ('search' in newFilters) {
-          const nextSearch = newFilters.search?.trim() || undefined
-          const currentSearch = prev.proxy_id || prev.search
-          const nextIsProtocol = nextSearch ? (newFilters.is_protocol ?? prev.is_protocol) : false
-          // Only reset offset and page if search actually changed
-          const searchChanged = nextSearch !== currentSearch || nextIsProtocol !== prev.is_protocol
-          if (searchChanged) {
-            if (nextIsProtocol) {
-              updated.proxy_id = nextSearch
-              updated.search = undefined
-            } else {
-              updated.search = nextSearch
-              updated.proxy_id = undefined
-            }
-            updated.is_protocol = nextIsProtocol
-            updated.offset = 0
-          } else {
-            // Preserve current offset if search didn't change
-            updated.offset = prev.offset
-          }
-        }
-        return updated
-      })
+  const handleFilterChange = useCallback((newFilters: Partial<typeof filters>) => {
+    setFilters(prev => {
+      let updated = { ...prev, ...newFilters }
+      if ('search' in newFilters) {
+        const nextSearch = newFilters.search?.trim() || undefined
+        const currentSearch = prev.proxy_id || prev.search || formatIdsInput(prev.ids)
+        const nextIsId = nextSearch ? (newFilters.is_id ?? prev.is_id) : false
+        const nextIsProtocol = nextSearch ? (newFilters.is_protocol ?? prev.is_protocol) : false
+        const searchChanged = nextSearch !== currentSearch || nextIsProtocol !== prev.is_protocol || nextIsId !== prev.is_id
 
-      const nextSearch = newFilters.search?.trim() || undefined
-      const currentSearch = filters.proxy_id || filters.search
-      const nextIsProtocol = nextSearch ? (newFilters.is_protocol ?? filters.is_protocol) : false
-      // Only reset page if search actually changed
-      if ('search' in newFilters && (nextSearch !== currentSearch || nextIsProtocol !== filters.is_protocol)) {
-        setCurrentPage(0)
+        if (searchChanged) {
+          if (nextIsId) {
+            updated.ids = parseIdsInput(nextSearch)
+            updated.search = undefined
+            updated.proxy_id = undefined
+          } else if (nextIsProtocol) {
+            updated.proxy_id = nextSearch
+            updated.search = undefined
+            updated.ids = undefined
+          } else {
+            updated.search = nextSearch
+            updated.proxy_id = undefined
+            updated.ids = undefined
+          }
+          updated.is_id = nextIsId
+          updated.is_protocol = nextIsProtocol
+          updated.offset = 0
+        } else {
+          updated.offset = prev.offset
+        }
       }
-    },
-    [filters.search, filters.proxy_id, filters.is_protocol],
-  )
+
+      const hasChanged = Object.keys(updated).some(key => {
+        const filterKey = key as keyof typeof filters
+        return !Object.is(updated[filterKey], prev[filterKey])
+      })
+      return hasChanged ? updated : prev
+    })
+
+    if ('search' in newFilters) {
+      setCurrentPage(0)
+    }
+  }, [])
 
   const handleManualRefresh = async () => {
     isAutoRefreshingRef.current = false
@@ -628,7 +746,10 @@ const UsersTable = memo(() => {
   const deleteMutation = useMutation({
     mutationFn: (ids: number[]) => bulkDeleteUsers({ ids }),
     onSuccess: (response, ids) => {
-      removeUsersFromUsersCache(queryClient, selectedUsers.filter(user => ids.includes(user.id)))
+      removeUsersFromUsersCache(
+        queryClient,
+        selectedUsers.filter(user => ids.includes(user.id)),
+      )
       clearSelection()
       toast.success(t('bulkUserActions.deleteSuccess', { count: response.count }))
     },
@@ -722,63 +843,75 @@ const UsersTable = memo(() => {
 
   const bulkActions: BulkActionItem[] = selectedCount
     ? [
-      {
-        key: 'delete',
-        label: t('usersTable.delete'),
-        icon: Trash2,
-        onClick: () => setBulkAction('delete'),
-        direct: true,
-        destructive: true,
-      },
-      {
-        key: 'reset',
-        label: t('userDialog.resetUsage'),
-        icon: RefreshCcw,
-        onClick: () => setBulkAction('reset'),
-      },
-      {
-        key: 'revoke',
-        label: t('userDialog.revokeSubscription'),
-        icon: Link2Off,
-        onClick: () => setBulkAction('revoke'),
-      },
-      ...(        isSudo
-        ? [
-          {
-            key: 'owner',
-            label: t('setOwnerModal.title'),
-            icon: UserCog,
-            onClick: () => setIsBulkSetOwnerModalOpen(true),
-          } as BulkActionItem,
-        ]
-        : []),
-      {
-        key: 'apply_template',
-        label: t('bulk.applyTemplate'),
-        icon: Layers,
-        onClick: () => setIsBulkApplyTemplateModalOpen(true),
-      },
-      ...(disableEligibleCount > 0
-        ? [
-          {
-            key: 'disable',
-            label: t('disable'),
-            icon: PowerOff,
-            onClick: () => setBulkAction('disable'),
-          } as BulkActionItem,
-        ]
-        : []),
-      ...(enableEligibleCount > 0
-        ? [
-          {
-            key: 'enable',
-            label: t('enable'),
-            icon: Power,
-            onClick: () => setBulkAction('enable'),
-          } as BulkActionItem,
-        ]
-        : []),
-    ]
+        ...(canDeleteUsers
+          ? [
+              {
+                key: 'delete',
+                label: t('usersTable.delete'),
+                icon: Trash2,
+                onClick: () => setBulkAction('delete'),
+                direct: true,
+                destructive: true,
+              } as BulkActionItem,
+            ]
+          : []),
+        ...(canUpdateUsers
+          ? [
+              {
+                key: 'reset',
+                label: t('userDialog.resetUsage'),
+                icon: RefreshCcw,
+                onClick: () => setBulkAction('reset'),
+              } as BulkActionItem,
+              {
+                key: 'revoke',
+                label: t('userDialog.revokeSubscription'),
+                icon: Link2Off,
+                onClick: () => setBulkAction('revoke'),
+              } as BulkActionItem,
+            ]
+          : []),
+        ...(canUpdateAllUsers
+          ? [
+              {
+                key: 'owner',
+                label: t('setOwnerModal.title'),
+                icon: UserCog,
+                onClick: () => setIsBulkSetOwnerModalOpen(true),
+              } as BulkActionItem,
+            ]
+          : []),
+        ...(canUpdateUsers
+          ? [
+              {
+                key: 'apply_template',
+                label: t('bulk.applyTemplate'),
+                icon: Layers,
+                onClick: () => setIsBulkApplyTemplateModalOpen(true),
+              } as BulkActionItem,
+            ]
+          : []),
+        ...(canUpdateUsers && disableEligibleCount > 0
+          ? [
+              {
+                key: 'disable',
+                label: t('disable'),
+                icon: PowerOff,
+                onClick: () => setBulkAction('disable'),
+              } as BulkActionItem,
+            ]
+          : []),
+        ...(canUpdateUsers && enableEligibleCount > 0
+          ? [
+              {
+                key: 'enable',
+                label: t('enable'),
+                icon: Power,
+                onClick: () => setBulkAction('enable'),
+              } as BulkActionItem,
+            ]
+          : []),
+      ]
     : []
 
   const handlePageChange = (newPage: number) => {
@@ -798,6 +931,8 @@ const UsersTable = memo(() => {
   }
 
   const handleEdit = (user: UserResponse) => {
+    if (!canUpdateUsers) return
+
     if (clearSelectedUserTimeoutRef.current) {
       clearTimeout(clearSelectedUserTimeoutRef.current)
       clearSelectedUserTimeoutRef.current = null
@@ -863,8 +998,8 @@ const UsersTable = memo(() => {
       setupColumns({
         t,
         dir,
-        showCreatedBy: isSudo && showCreatedBy,
-        showSelectionCheckbox,
+        showCreatedBy: canReadAllUsers && showCreatedBy,
+        showSelectionCheckbox: showSelectionCheckbox && canBulkMutateUsers,
         handleSort,
         filters: {
           sort: filters.sort,
@@ -872,17 +1007,18 @@ const UsersTable = memo(() => {
         },
         handleStatusFilter,
       }),
-    [t, dir, isSudo, showCreatedBy, showSelectionCheckbox, handleSort, filters.sort, filters.status, handleStatusFilter],
+    [t, dir, canReadAllUsers, showCreatedBy, showSelectionCheckbox, canBulkMutateUsers, handleSort, filters.sort, filters.status, handleStatusFilter],
   )
 
   const handleAdvanceSearchSubmit = async (values: AdvanceSearchFormValue) => {
     if (isAdvanceSearchApplying) return
-    const currentSearch = filters.proxy_id || filters.search
+    const currentSearch = filters.proxy_id || filters.search || formatIdsInput(filters.ids)
 
     const nextFilters = {
       ...filters,
-      search: values.is_protocol ? undefined : currentSearch,
+      search: values.is_protocol || values.is_id ? undefined : currentSearch,
       proxy_id: values.is_protocol ? currentSearch : undefined,
+      ids: values.is_id ? parseIdsInput(currentSearch) : undefined,
       admin: values.admin && values.admin.length > 0 ? values.admin : undefined,
       group: values.group && values.group.length > 0 ? values.group : undefined,
       status: values.status && values.status !== '0' ? values.status : undefined,
@@ -896,6 +1032,7 @@ const UsersTable = memo(() => {
       online_after: values.online ? undefined : values.online_after ? startOfDay(values.online_after).toISOString() : undefined,
       online_before: values.online ? undefined : values.online_before ? endOfDay(values.online_before).toISOString() : undefined,
       is_protocol: values.is_protocol,
+      is_id: values.is_id,
       offset: 0,
     }
 
@@ -916,7 +1053,7 @@ const UsersTable = memo(() => {
         // Preserve previous behavior: apply filters even if the eager fetch fails.
       }
 
-      if (isSudo) {
+      if (canReadAllUsers) {
         setShowCreatedBy(values.show_created_by)
         setUsersShowCreatedBy(values.show_created_by)
       }
@@ -959,6 +1096,7 @@ const UsersTable = memo(() => {
     advanceSearchForm.reset({
       is_username: true,
       is_protocol: false,
+      is_id: false,
       show_created_by: showCreatedBy,
       show_selection_checkbox: showSelectionCheckbox,
       no_data_limit: false,
@@ -976,6 +1114,7 @@ const UsersTable = memo(() => {
     })
     setFilters(prev => ({
       ...prev,
+      ids: undefined,
       admin: undefined,
       group: undefined,
       status: undefined,
@@ -989,6 +1128,7 @@ const UsersTable = memo(() => {
       no_data_limit: undefined,
       no_expire: undefined,
       is_protocol: false,
+      is_id: false,
       proxy_id: undefined,
       offset: 0,
     }))
@@ -1001,6 +1141,7 @@ const UsersTable = memo(() => {
   const hasActiveFilters = !!(
     filters.search ||
     filters.proxy_id ||
+    filters.ids?.length ||
     filters.status ||
     filters.admin?.length ||
     filters.group?.length ||
@@ -1030,17 +1171,13 @@ const UsersTable = memo(() => {
         handleSort={handleSort}
         onClearAdvanceSearch={handleClearAdvanceSearch}
       />
-      <BulkActionsBar
-        selectedCount={selectedCount}
-        onClear={clearSelection}
-        actions={bulkActions}
-      />
+      {canBulkMutateUsers && <BulkActionsBar selectedCount={selectedCount} onClear={clearSelection} actions={bulkActions} />}
       {isEmpty && (
         <Card className="mb-12">
           <CardContent className="p-8 text-center">
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">{t('users.noUsers')}</h3>
-              <p className="mx-auto max-w-2xl text-muted-foreground">{t('users.noUsersDescription')}</p>
+              <p className="text-muted-foreground mx-auto max-w-2xl">{t('users.noUsersDescription')}</p>
             </div>
           </CardContent>
         </Card>
@@ -1050,13 +1187,21 @@ const UsersTable = memo(() => {
           <CardContent className="p-8 text-center">
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">{t('noResults')}</h3>
-              <p className="mx-auto max-w-2xl text-muted-foreground">{t('users.noSearchResults')}</p>
+              <p className="text-muted-foreground mx-auto max-w-2xl">{t('users.noSearchResults')}</p>
             </div>
           </CardContent>
         </Card>
       )}
       {isCurrentlyLoading && !isSearchEmpty && (
-        <DataTable columns={columns} data={[]} isLoading={true} isFetching={false} onEdit={handleEdit} onSelectionChange={setSelectedUserIds} resetSelectionKey={resetSelectionKey} />
+        <DataTable
+          columns={columns}
+          data={[]}
+          isLoading={true}
+          isFetching={false}
+          onEdit={canUpdateUsers ? handleEdit : undefined}
+          onSelectionChange={setSelectedUserIds}
+          resetSelectionKey={resetSelectionKey}
+        />
       )}
       {!isEmpty && !isSearchEmpty && !isCurrentlyLoading && (
         <DataTable
@@ -1064,7 +1209,7 @@ const UsersTable = memo(() => {
           data={usersList}
           isLoading={false}
           isFetching={isPageLoading}
-          onEdit={handleEdit}
+          onEdit={canUpdateUsers ? handleEdit : undefined}
           onSelectionChange={setSelectedUserIds}
           resetSelectionKey={resetSelectionKey}
         />
@@ -1078,7 +1223,7 @@ const UsersTable = memo(() => {
         onPageChange={handlePageChange}
         onItemsPerPageChange={handleItemsPerPageChange}
       />
-      {selectedUser && (
+      {canUpdateUsers && selectedUser && (
         <UserModal
           isDialogOpen={isEditModalOpen}
           onOpenChange={handleEditModalClose}
@@ -1094,7 +1239,7 @@ const UsersTable = memo(() => {
         onOpenChange={handleAdvanceSearchOpenChange}
         form={advanceSearchForm}
         onSubmit={handleAdvanceSearchSubmit}
-        isSudo={isSudo}
+        isSudo={canReadAllUsers}
         isApplying={isAdvanceSearchApplying}
       />
       <BulkActionAlertDialog
@@ -1149,26 +1294,30 @@ const UsersTable = memo(() => {
         onConfirm={handleBulkEnableUsers}
         isPending={enableUsersMutation.isPending}
       />
-      <SetOwnerModal
-        open={isBulkSetOwnerModalOpen}
-        onClose={() => setIsBulkSetOwnerModalOpen(false)}
-        userIds={selectedUserIds}
-        selectedCount={selectedCount}
-        onSuccess={() => {
-          invalidateUsers()
-          clearSelection()
-        }}
-      />
-      <ApplyTemplateModal
-        open={isBulkApplyTemplateModalOpen}
-        onClose={() => setIsBulkApplyTemplateModalOpen(false)}
-        userIds={selectedUserIds}
-        selectedCount={selectedCount}
-        onSuccess={() => {
-          invalidateUsers()
-          clearSelection()
-        }}
-      />
+      {canUpdateAllUsers && (
+        <SetOwnerModal
+          open={isBulkSetOwnerModalOpen}
+          onClose={() => setIsBulkSetOwnerModalOpen(false)}
+          userIds={selectedUserIds}
+          selectedCount={selectedCount}
+          onSuccess={() => {
+            invalidateUsers()
+            clearSelection()
+          }}
+        />
+      )}
+      {canUpdateUsers && (
+        <ApplyTemplateModal
+          open={isBulkApplyTemplateModalOpen}
+          onClose={() => setIsBulkApplyTemplateModalOpen(false)}
+          userIds={selectedUserIds}
+          selectedCount={selectedCount}
+          onSuccess={() => {
+            invalidateUsers()
+            clearSelection()
+          }}
+        />
+      )}
       <ActionButtonsModalHost />
     </div>
   )

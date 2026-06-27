@@ -10,9 +10,12 @@ import { cn } from '@/lib/utils'
 interface UseUserTemplatesListColumnsProps {
   onEdit: (template: UserTemplateResponse) => void
   onToggleStatus: (template: UserTemplateResponse) => void
+  canCreate?: boolean
+  canUpdate?: boolean
+  canDelete?: boolean
 }
 
-export const useUserTemplatesListColumns = ({ onEdit, onToggleStatus }: UseUserTemplatesListColumnsProps) => {
+export const useUserTemplatesListColumns = ({ onEdit, onToggleStatus, canCreate = true, canUpdate = true, canDelete = true }: UseUserTemplatesListColumnsProps) => {
   const { t } = useTranslation()
 
   return useMemo<ListColumn<UserTemplateResponse>[]>(
@@ -23,10 +26,10 @@ export const useUserTemplatesListColumns = ({ onEdit, onToggleStatus }: UseUserT
         width: '3fr',
         cell: template => (
           <div
-            className="flex min-w-0 cursor-pointer items-center gap-2"
+            className={cn('flex min-w-0 items-center gap-2', canUpdate && 'cursor-pointer')}
             onClick={event => {
               event.stopPropagation()
-              onEdit(template)
+              if (canUpdate) onEdit(template)
             }}
           >
             <span className={cn('h-2 w-2 shrink-0 rounded-full', template.is_disabled ? 'bg-red-500' : 'bg-green-500')} />
@@ -39,7 +42,7 @@ export const useUserTemplatesListColumns = ({ onEdit, onToggleStatus }: UseUserT
         header: t('userDialog.dataLimit', { defaultValue: 'Data Limit' }),
         width: '1fr',
         cell: template => (
-          <span dir="ltr" className="text-xs text-muted-foreground">
+          <span dir="ltr" className="text-muted-foreground text-xs">
             {!template.data_limit || template.data_limit === 0 ? <Infinity className="inline h-4 w-4" /> : formatBytes(template.data_limit)}
           </span>
         ),
@@ -50,7 +53,7 @@ export const useUserTemplatesListColumns = ({ onEdit, onToggleStatus }: UseUserT
         header: t('expire', { defaultValue: 'Expire' }),
         width: '1fr',
         cell: template => (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-muted-foreground text-xs">
             {!template.expire_duration || template.expire_duration === 0 ? (
               <Infinity className="inline h-4 w-4" />
             ) : (
@@ -65,25 +68,33 @@ export const useUserTemplatesListColumns = ({ onEdit, onToggleStatus }: UseUserT
         header: t('templates.hwidLimit', { defaultValue: 'HWID' }),
         width: '1fr',
         cell: template => (
-          <span dir="ltr" className="text-xs text-muted-foreground">
-            {template.hwid_limit === null || template.hwid_limit === undefined
-              ? t('default', { defaultValue: 'Default' })
-              : template.hwid_limit === 0
-                ? <Infinity className="inline h-4 w-4" />
-                : template.hwid_limit}
+          <span dir="ltr" className="text-muted-foreground text-xs">
+            {template.hwid_limit === null || template.hwid_limit === undefined ? (
+              t('default', { defaultValue: 'Default' })
+            ) : template.hwid_limit === 0 ? (
+              <Infinity className="inline h-4 w-4" />
+            ) : (
+              template.hwid_limit
+            )}
           </span>
         ),
         hideOnMobile: true,
       },
-      {
-        id: 'actions',
-        header: '',
-        width: '64px',
-        align: 'end',
-        hideOnMobile: true,
-        cell: template => <UserTemplateActionsMenu template={template} onEdit={onEdit} onToggleStatus={onToggleStatus} />,
-      },
+      ...(canCreate || canUpdate || canDelete
+        ? [
+            {
+              id: 'actions',
+              header: '',
+              width: '64px',
+              align: 'end' as const,
+              hideOnMobile: true,
+              cell: (template: UserTemplateResponse) => (
+                <UserTemplateActionsMenu template={template} onEdit={onEdit} onToggleStatus={onToggleStatus} canCreate={canCreate} canUpdate={canUpdate} canDelete={canDelete} />
+              ),
+            },
+          ]
+        : []),
     ],
-    [t, onEdit, onToggleStatus],
+    [t, onEdit, onToggleStatus, canCreate, canUpdate, canDelete],
   )
 }

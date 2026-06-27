@@ -3,51 +3,36 @@ from datetime import timezone as tz
 from aiogram.utils.web_app import WebAppInitData, safe_parse_webapp_init_data
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-
 from sqlalchemy import func, select
+from sqlalchemy.orm import selectinload
 
 from app.db import AsyncSession, get_db
 from app.db.crud.admin import (
+    build_admin_details,
     find_admins_by_telegram_id,
     get_admin as get_admin_by_username,
     get_admin_by_id as get_admin_by_id_crud,
     get_admin_by_telegram_id,
 )
 from app.db.models import Admin, AdminUsageLogs, User
-from app.models.admin import AdminDetails, AdminValidationResult, verify_password
+from app.models.admin import AdminDetails, AdminRoleData, AdminStatus, AdminValidationResult, verify_password
+from app.models.admin_role import RoleAccess, RoleFeatures, RoleLimits, RolePermissions
 from app.models.settings import Telegram
+from app.operation.permissions import PermissionDenied, enforce_permission, is_scope_all
 from app.settings import telegram_settings
 from app.utils.jwt import get_admin_payload
 from config import auth_settings, runtime_settings
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/admin/token")
 
-
-def _build_admin_details(
-    db_admin: Admin,
-    *,
-    total_users: int = 0,
-    reseted_usage: int | None = None,
-) -> AdminDetails:
-    used_traffic = int(db_admin.used_traffic or 0)
-    return AdminDetails(
-        id=db_admin.id,
-        username=db_admin.username,
-        is_sudo=db_admin.is_sudo,
-        total_users=int(total_users or 0),
-        used_traffic=used_traffic,
-        is_disabled=db_admin.is_disabled,
-        telegram_id=db_admin.telegram_id,
-        discord_webhook=db_admin.discord_webhook,
-        sub_domain=db_admin.sub_domain,
-        profile_title=db_admin.profile_title,
-        support_url=db_admin.support_url,
-        note=db_admin.note,
-        notification_enable=db_admin.notification_enable,
-        discord_id=db_admin.discord_id,
-        sub_template=db_admin.sub_template,
-        lifetime_used_traffic=None if reseted_usage is None else int(reseted_usage or 0) + used_traffic,
-    )
+# Owner-level role data given to env admins — full permissions, bypasses all checks
+_ENV_ADMIN_ROLE = AdminRoleData(
+    is_owner=True,
+    permissions=RolePermissions(),  # is_owner=True bypasses permission checks entirely
+    limits=RoleLimits(),
+    features=RoleFeatures(),
+    access=RoleAccess(),
+)
 
 
 def _is_token_valid_for_admin(db_admin: Admin, payload: dict) -> bool:
@@ -61,7 +46,7 @@ def _is_token_valid_for_admin(db_admin: Admin, payload: dict) -> bool:
 async def get_admin(db: AsyncSession, token: str) -> AdminDetails | None:
     payload = await get_admin_payload(token)
     if not payload:
-        return
+        return None
 
     db_admin = None
     if payload.get("admin_id") is not None:
@@ -72,18 +57,20 @@ async def get_admin(db: AsyncSession, token: str) -> AdminDetails | None:
 
     if db_admin:
         if not _is_token_valid_for_admin(db_admin, payload):
-            return
+            return None
+        return build_admin_details(db_admin)
 
-        return _build_admin_details(db_admin)
+    # Env admin fallback — no DB record, but username is a known env admin
+    if payload["username"] in auth_settings.sudoers:
+        return AdminDetails(username=payload["username"], role=_ENV_ADMIN_ROLE)
 
-    elif payload["username"] in auth_settings.sudoers and payload["is_sudo"] is True:
-        return AdminDetails(username=payload["username"], is_sudo=True)
+    return None
 
 
 async def get_admin_with_metrics(db: AsyncSession, token: str) -> AdminDetails | None:
     payload = await get_admin_payload(token)
     if not payload:
-        return
+        return None
 
     total_users_subquery = (
         select(func.count(User.id)).where(User.admin_id == Admin.id).correlate(Admin).scalar_subquery()
@@ -94,36 +81,27 @@ async def get_admin_with_metrics(db: AsyncSession, token: str) -> AdminDetails |
         .correlate(Admin)
         .scalar_subquery()
     )
+
+    base_stmt = select(Admin, total_users_subquery, reseted_usage_subquery).options(selectinload(Admin.role))
+
     if payload.get("admin_id") is not None:
-        admin_row = (
-            await db.execute(
-                select(Admin, total_users_subquery, reseted_usage_subquery).where(Admin.id == payload["admin_id"])
-            )
-        ).one_or_none()
+        admin_row = (await db.execute(base_stmt.where(Admin.id == payload["admin_id"]))).one_or_none()
         if admin_row is None:
-            admin_row = (
-                await db.execute(
-                    select(Admin, total_users_subquery, reseted_usage_subquery).where(
-                        Admin.username == payload["username"]
-                    )
-                )
-            ).one_or_none()
+            admin_row = (await db.execute(base_stmt.where(Admin.username == payload["username"]))).one_or_none()
     else:
-        admin_row = (
-            await db.execute(
-                select(Admin, total_users_subquery, reseted_usage_subquery).where(Admin.username == payload["username"])
-            )
-        ).one_or_none()
+        admin_row = (await db.execute(base_stmt.where(Admin.username == payload["username"]))).one_or_none()
 
     if admin_row:
         db_admin, total_users, reseted_usage = admin_row
         if not _is_token_valid_for_admin(db_admin, payload):
-            return
+            return None
+        return build_admin_details(db_admin, total_users=total_users, reseted_usage=reseted_usage)
 
-        return _build_admin_details(db_admin, total_users=total_users, reseted_usage=reseted_usage)
+    # Env admin fallback — no DB record, but username is a known env admin
+    if payload["username"] in auth_settings.sudoers:
+        return AdminDetails(username=payload["username"], role=_ENV_ADMIN_ROLE)
 
-    elif payload["username"] in auth_settings.sudoers and payload["is_sudo"] is True:
-        return AdminDetails(username=payload["username"], is_sudo=True)
+    return None
 
 
 async def get_current(db: AsyncSession = Depends(get_db), token: str = Depends(oauth2_scheme)):
@@ -134,13 +112,12 @@ async def get_current(db: AsyncSession = Depends(get_db), token: str = Depends(o
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if admin.is_disabled:
+    if admin.status == AdminStatus.disabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="your account has been disabled",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     return admin
 
 
@@ -152,39 +129,75 @@ async def get_current_with_metrics(db: AsyncSession = Depends(get_db), token: st
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if admin.is_disabled:
+    if admin.status == AdminStatus.disabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="your account has been disabled",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     return admin
 
 
-async def check_sudo_admin(admin: AdminDetails = Depends(get_current)):
-    if not admin.is_sudo:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You're not allowed")
+def require_permission(resource: str, action: str):
+    """FastAPI dependency factory — checks RBAC permission for resource+action."""
+
+    async def _check(admin: AdminDetails = Depends(get_current)):
+        try:
+            enforce_permission(admin, resource, action)
+        except PermissionDenied as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+        return admin
+
+    return _check
+
+
+def require_scope_all(resource: str, action: str):
+    """
+    FastAPI dependency factory — checks RBAC permission AND requires scope=all (or owner).
+    Used for operations that affect all users regardless of ownership.
+    """
+
+    async def _check(admin: AdminDetails = Depends(get_current)):
+        try:
+            enforce_permission(admin, resource, action)
+        except PermissionDenied as e:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+        # Scope check: must be owner or have scope=ALL (or True = no scope restriction)
+        if not is_scope_all(admin, resource, action):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission denied: {resource}.{action} requires scope=all",
+            )
+        return admin
+
+    return _check
+
+
+async def require_owner(admin: AdminDetails = Depends(get_current)):
+    """FastAPI dependency — allows only the owner (is_owner=True)."""
+    if not admin.is_owner:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner can perform this action")
     return admin
 
 
 async def validate_admin(db: AsyncSession, username: str, password: str) -> AdminValidationResult | None:
-    """Validate admin credentials with environment variables or database."""
-
+    """Validate admin credentials against the database, with env admin fallback."""
     db_admin = await get_admin_by_username(db, username, load_users=False, load_usage_logs=False)
     if db_admin and await verify_password(password, db_admin.hashed_password):
         return AdminValidationResult(
             id=db_admin.id,
             username=db_admin.username,
-            is_sudo=db_admin.is_sudo,
-            is_disabled=db_admin.is_disabled,
+            status=db_admin.status,
         )
 
+    # Env admin fallback — only allowed in debug/testing
     if not db_admin and auth_settings.sudoers.get(username) == password:
         if not runtime_settings.debug:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="env admin not allowed in production")
+        return AdminValidationResult(username=username, status=AdminStatus.active)
 
-        return AdminValidationResult(username=username, is_sudo=True, is_disabled=False)
+    return None
 
 
 async def validate_mini_app_admin(db: AsyncSession, token: str) -> AdminValidationResult | None:
@@ -218,6 +231,6 @@ async def validate_mini_app_admin(db: AsyncSession, token: str) -> AdminValidati
         return AdminValidationResult(
             id=db_admin.id,
             username=db_admin.username,
-            is_sudo=db_admin.is_sudo,
-            is_disabled=db_admin.is_disabled,
+            status=db_admin.status,
         )
+    return None

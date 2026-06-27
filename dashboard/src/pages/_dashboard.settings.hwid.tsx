@@ -15,6 +15,7 @@ const hwidSettingsSchema = z
   .object({
     enabled: z.boolean().default(false),
     forced: z.boolean().default(false),
+    require_hwid_for_manual_sub: z.boolean().default(true),
     fallback_limit: z.number().min(0).default(0),
     min_limit: z.number().min(0).default(0),
     max_limit: z.number().min(0).default(0),
@@ -34,9 +35,16 @@ type HwidSettingsFormInput = z.input<typeof hwidSettingsSchema>
 const defaultValues: HwidSettingsFormInput = {
   enabled: false,
   forced: false,
+  require_hwid_for_manual_sub: true,
   fallback_limit: 0,
   min_limit: 0,
   max_limit: 0,
+}
+
+const toDeviceLimit = (value: unknown): number => {
+  const numericValue = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : 0
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 0
+  return Math.floor(numericValue)
 }
 
 export default function HwidSettings() {
@@ -49,9 +57,10 @@ export default function HwidSettings() {
     return {
       enabled: hwid.enabled ?? false,
       forced: hwid.forced ?? false,
-      fallback_limit: hwid.fallback_limit ?? 0,
-      min_limit: hwid.min_limit ?? 0,
-      max_limit: hwid.max_limit ?? 0,
+      require_hwid_for_manual_sub: hwid.require_hwid_for_manual_sub ?? true,
+      fallback_limit: toDeviceLimit(hwid.fallback_limit),
+      min_limit: toDeviceLimit(hwid.min_limit),
+      max_limit: toDeviceLimit(hwid.max_limit),
     }
   }, [settings?.hwid])
 
@@ -66,9 +75,10 @@ export default function HwidSettings() {
         hwid: {
           enabled: data.enabled,
           forced: data.enabled ? data.forced : false,
-          fallback_limit: Math.floor(data.fallback_limit ?? 0),
-          min_limit: Math.floor(data.min_limit ?? 0),
-          max_limit: Math.floor(data.max_limit ?? 0),
+          require_hwid_for_manual_sub: data.require_hwid_for_manual_sub,
+          fallback_limit: toDeviceLimit(data.fallback_limit),
+          min_limit: toDeviceLimit(data.min_limit),
+          max_limit: toDeviceLimit(data.max_limit),
         },
       })
     } catch {
@@ -82,6 +92,7 @@ export default function HwidSettings() {
   }
 
   const hwidEnabled = form.watch('enabled')
+  const hwidForced = form.watch('forced')
 
   if (isLoading) {
     return (
@@ -101,7 +112,7 @@ export default function HwidSettings() {
   if (error) {
     return (
       <div className="flex min-h-[400px] items-center justify-center p-4 sm:py-6 lg:py-8">
-        <p className="text-sm text-destructive">{t('settings.hwid.loadError', { defaultValue: 'Failed to load HWID settings' })}</p>
+        <p className="text-destructive text-sm">{t('settings.hwid.loadError', { defaultValue: 'Failed to load HWID settings' })}</p>
       </div>
     )
   }
@@ -112,20 +123,18 @@ export default function HwidSettings() {
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6 p-4 sm:py-6 lg:py-8">
           <section className="space-y-4">
             <div className="space-y-1.5">
-              <h3 className="text-base font-semibold sm:text-lg">
-                {t('settings.hwid.policy.title', { defaultValue: 'Device registration policy' })}
-              </h3>
-              <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground sm:text-sm">
+              <h3 className="text-base font-semibold sm:text-lg">{t('settings.hwid.policy.title', { defaultValue: 'Device registration policy' })}</h3>
+              <p className="text-muted-foreground max-w-3xl text-xs leading-relaxed sm:text-sm">
                 {t('settings.hwid.policy.description', { defaultValue: 'Control subscription access by registered hardware IDs.' })}
               </p>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-2">
+            <div className="grid gap-3 lg:grid-cols-3">
               <FormField
                 control={form.control}
                 name="enabled"
                 render={({ field }) => (
-                  <FormItem className="flex-row items-center justify-between gap-4 rounded-md border bg-card p-3 transition-colors hover:bg-accent/50 sm:p-4">
+                  <FormItem className="bg-card hover:bg-accent/50 flex flex-row items-center justify-between gap-4 space-y-0 rounded-md border p-3 transition-colors sm:p-4">
                     <div className="min-w-0 flex-1 space-y-1">
                       <FormLabel className="cursor-pointer text-sm font-medium">{t('settings.hwid.enabled.title', { defaultValue: 'Enable HWID checks' })}</FormLabel>
                       <FormDescription className="text-xs leading-relaxed sm:text-sm">
@@ -143,7 +152,7 @@ export default function HwidSettings() {
                 control={form.control}
                 name="forced"
                 render={({ field }) => (
-                  <FormItem className="flex-row items-center justify-between gap-4 rounded-md border bg-card p-3 transition-colors hover:bg-accent/50 sm:p-4">
+                  <FormItem className="bg-card hover:bg-accent/50 flex flex-row items-center justify-between gap-4 space-y-0 rounded-md border p-3 transition-colors sm:p-4">
                     <div className="min-w-0 flex-1 space-y-1">
                       <FormLabel className="cursor-pointer text-sm font-medium">{t('settings.hwid.forced.title', { defaultValue: 'Require HWID header' })}</FormLabel>
                       <FormDescription className="text-xs leading-relaxed sm:text-sm">
@@ -156,13 +165,33 @@ export default function HwidSettings() {
                   </FormItem>
                 )}
               />
+
+              <FormField
+                control={form.control}
+                name="require_hwid_for_manual_sub"
+                render={({ field }) => (
+                  <FormItem className="bg-card hover:bg-accent/50 flex flex-row items-center justify-between gap-4 space-y-0 rounded-md border p-3 transition-colors sm:p-4">
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <FormLabel className="cursor-pointer text-sm font-medium">
+                        {t('settings.hwid.manualSubscription.title', { defaultValue: 'Require HWID for manual subscriptions' })}
+                      </FormLabel>
+                      <FormDescription className="text-xs leading-relaxed sm:text-sm">
+                        {t('settings.hwid.manualSubscription.description', { defaultValue: 'Apply the forced HWID header policy to manual subscription format requests.' })}
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch checked={field.value} onCheckedChange={field.onChange} disabled={!hwidEnabled || !hwidForced} className="shrink-0" />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
             </div>
           </section>
 
           <section className="space-y-4">
             <div className="space-y-1.5">
               <h3 className="text-base font-semibold sm:text-lg">{t('settings.hwid.limits.title', { defaultValue: 'Device limits' })}</h3>
-              <p className="max-w-3xl text-xs leading-relaxed text-muted-foreground sm:text-sm">
+              <p className="text-muted-foreground max-w-3xl text-xs leading-relaxed sm:text-sm">
                 {t('settings.hwid.limits.description', { defaultValue: 'Set the default device count and optional bounds for per-user HWID limits.' })}
               </p>
             </div>

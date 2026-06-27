@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { useAdmin } from '@/hooks/use-admin'
 import { getCurrentAdmin } from '@/service/api'
+import { hasPermission } from '@/utils/rbac'
 import { createHashRouter, Navigate, RouteObject } from 'react-router'
 import { LoadingSpinner } from '@/components/common/loading-spinner'
 import { TabbedRouteSuspenseFallback } from '@/components/layout/tabbed-route-suspense-fallback'
@@ -13,6 +14,7 @@ const ThemePage = lazyWithChunkRecovery(() => import('@/pages/_dashboard.setting
 const DashboardLayout = lazyWithChunkRecovery(() => import('../pages/_dashboard'))
 const Dashboard = lazyWithChunkRecovery(() => import('../pages/_dashboard._index'))
 const AdminsPage = lazyWithChunkRecovery(() => import('../pages/_dashboard.admins'))
+const AdminRolesPage = lazyWithChunkRecovery(() => import('../pages/_dashboard.admin-roles'))
 const BulkPage = lazyWithChunkRecovery(() => import('../pages/_dashboard.bulk'))
 const BulkCreatePage = lazyWithChunkRecovery(() => import('../pages/_dashboard.bulk.create'))
 const BulkDataPage = lazyWithChunkRecovery(() => import('../pages/_dashboard.bulk.data'))
@@ -27,7 +29,6 @@ const NodesPage = lazyWithChunkRecovery(() => import('../pages/_dashboard.nodes.
 const NodeLogs = lazyWithChunkRecovery(() => import('../pages/_dashboard.nodes.logs'))
 const Settings = lazyWithChunkRecovery(() => import('../pages/_dashboard.settings'))
 const CleanupSettings = lazyWithChunkRecovery(() => import('../pages/_dashboard.settings.cleanup'))
-const DiscordSettings = lazyWithChunkRecovery(() => import('../pages/_dashboard.settings.discord'))
 const GeneralSettings = lazyWithChunkRecovery(() => import('../pages/_dashboard.settings.general'))
 const HwidSettings = lazyWithChunkRecovery(() => import('../pages/_dashboard.settings.hwid'))
 const NotificationSettings = lazyWithChunkRecovery(() => import('../pages/_dashboard.settings.notifications'))
@@ -44,10 +45,16 @@ const Login = lazyWithChunkRecovery(() => import('../pages/login'))
 // Component to handle default settings routing based on user permissions
 function SettingsIndex() {
   const { admin } = useAdmin()
-  const is_sudo = admin?.is_sudo || false
+  const canUpdateSettings = hasPermission(admin, 'settings', 'update')
+  const canSeeGeneral = hasPermission(admin, 'settings', 'read_general') && canUpdateSettings
+  const defaultPath = canSeeGeneral ? '/settings/general' : '/settings/theme'
 
-  // For sudo admins, default to notifications; for non-sudo admins, default to theme
-  const defaultPath = is_sudo ? '/settings/general' : '/settings/theme'
+  return <Navigate to={defaultPath} replace />
+}
+
+function TemplatesIndex() {
+  const { admin } = useAdmin()
+  const defaultPath = hasPermission(admin, 'templates', 'read') ? '/templates/user' : hasPermission(admin, 'client_templates', 'read') ? '/templates/client' : '/settings/theme'
 
   return <Navigate to={defaultPath} replace />
 }
@@ -180,7 +187,7 @@ export const router = createHashRouter([
         children: [
           {
             index: true,
-            element: <Navigate to="/templates/user" replace />,
+            element: <TemplatesIndex />,
           },
           {
             path: '/templates/user',
@@ -205,6 +212,14 @@ export const router = createHashRouter([
         element: (
           <Suspense fallback={<LoadingSpinner />}>
             <AdminsPage />
+          </Suspense>
+        ),
+      },
+      {
+        path: '/admin-roles',
+        element: (
+          <Suspense fallback={<LoadingSpinner />}>
+            <AdminRolesPage />
           </Suspense>
         ),
       },
@@ -262,14 +277,6 @@ export const router = createHashRouter([
             element: (
               <Suspense fallback={<LoadingSpinner />}>
                 <TelegramSettings />
-              </Suspense>
-            ),
-          },
-          {
-            path: '/settings/discord',
-            element: (
-              <Suspense fallback={<LoadingSpinner />}>
-                <DiscordSettings />
               </Suspense>
             ),
           },

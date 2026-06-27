@@ -13,20 +13,13 @@ import { queryClient } from '@/utils/query-client'
 interface ClientTemplateActionsMenuProps {
   template: ClientTemplateResponse
   onEdit: (template: ClientTemplateResponse) => void
+  canCreate?: boolean
+  canUpdate?: boolean
+  canDelete?: boolean
   className?: string
 }
 
-const DeleteAlertDialog = ({
-  template,
-  isOpen,
-  onClose,
-  onConfirm,
-}: {
-  template: ClientTemplateResponse
-  isOpen: boolean
-  onClose: () => void
-  onConfirm: () => void
-}) => {
+const DeleteAlertDialog = ({ template, isOpen, onClose, onConfirm }: { template: ClientTemplateResponse; isOpen: boolean; onClose: () => void; onConfirm: () => void }) => {
   const { t } = useTranslation()
   const dir = useDirDetection()
 
@@ -58,7 +51,7 @@ const DeleteAlertDialog = ({
   )
 }
 
-export default function ClientTemplateActionsMenu({ template, onEdit, className }: ClientTemplateActionsMenuProps) {
+export default function ClientTemplateActionsMenu({ template, onEdit, canCreate = true, canUpdate = true, canDelete = true, className }: ClientTemplateActionsMenuProps) {
   const { t } = useTranslation()
   const dir = useDirDetection()
   const removeClientTemplateMutation = useRemoveClientTemplate()
@@ -67,10 +60,13 @@ export default function ClientTemplateActionsMenu({ template, onEdit, className 
   const handleDeleteClick = (event: Event) => {
     event.preventDefault()
     event.stopPropagation()
+    if (!canDelete) return
     setDeleteDialogOpen(true)
   }
 
   const handleConfirmDelete = async () => {
+    if (!canDelete) return
+
     try {
       await removeClientTemplateMutation.mutateAsync({ templateId: template.id })
       toast.success(t('success', { defaultValue: 'Success' }), {
@@ -92,6 +88,8 @@ export default function ClientTemplateActionsMenu({ template, onEdit, className 
   }
 
   const handleDuplicate = async () => {
+    if (!canCreate) return
+
     try {
       await createClientTemplate({
         name: `${template.name} (copy)`,
@@ -116,6 +114,9 @@ export default function ClientTemplateActionsMenu({ template, onEdit, className 
     }
   }
 
+  const hasTemplateActions = canUpdate || (!template.is_system && (canCreate || canDelete))
+  if (!hasTemplateActions) return null
+
   return (
     <div className={cn(className)} onClick={e => e.stopPropagation()}>
       <DropdownMenu>
@@ -126,45 +127,51 @@ export default function ClientTemplateActionsMenu({ template, onEdit, className 
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align={dir === 'rtl' ? 'end' : 'start'}>
-          <DropdownMenuItem
-            onSelect={e => {
-              e.stopPropagation()
-              onEdit(template)
-            }}
-          >
-            <Pen className="h-4 w-4" />
-            <span>{t('edit')}</span>
-          </DropdownMenuItem>
-          {!template.is_system && (
+          {canUpdate && (
+            <DropdownMenuItem
+              onSelect={e => {
+                e.stopPropagation()
+                onEdit(template)
+              }}
+            >
+              <Pen className="h-4 w-4" />
+              <span>{t('edit')}</span>
+            </DropdownMenuItem>
+          )}
+          {!template.is_system && (canCreate || canDelete) && (
             <>
-              <DropdownMenuItem
-                dir={dir}
-                onSelect={e => {
-                  e.stopPropagation()
-                  handleDuplicate()
-                }}
-              >
-                <Copy className="h-4 w-4" />
-                <span>{t('duplicate')}</span>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                dir={dir}
-                className="!text-red-500"
-                onSelect={e => {
-                  e.stopPropagation()
-                  handleDeleteClick(e)
-                }}
-              >
-                <Trash2 className="h-4 w-4 text-red-500" />
-                <span>{t('delete')}</span>
-              </DropdownMenuItem>
+              {canCreate && (
+                <DropdownMenuItem
+                  dir={dir}
+                  onSelect={e => {
+                    e.stopPropagation()
+                    handleDuplicate()
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                  <span>{t('duplicate')}</span>
+                </DropdownMenuItem>
+              )}
+              {(canUpdate || canCreate) && canDelete && <DropdownMenuSeparator />}
+              {canDelete && (
+                <DropdownMenuItem
+                  dir={dir}
+                  className="!text-red-500"
+                  onSelect={e => {
+                    e.stopPropagation()
+                    handleDeleteClick(e)
+                  }}
+                >
+                  <Trash2 className="h-4 w-4 text-red-500" />
+                  <span>{t('delete')}</span>
+                </DropdownMenuItem>
+              )}
             </>
           )}
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <DeleteAlertDialog template={template} isOpen={isDeleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} onConfirm={handleConfirmDelete} />
+      {canDelete && <DeleteAlertDialog template={template} isOpen={isDeleteDialogOpen} onClose={() => setDeleteDialogOpen(false)} onConfirm={handleConfirmDelete} />}
     </div>
   )
 }

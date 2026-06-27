@@ -27,6 +27,8 @@ import {
   getGeneralSettings,
   getGetGeneralSettingsQueryKey,
   getGetGroupsSimpleQueryKey,
+  modifyUserById,
+  setUserDisabledById,
   useCreateUser,
   useCreateUserFromTemplate,
   useGetGroupsSimple,
@@ -43,8 +45,27 @@ import { parseDateInput } from '@/utils/dateTimeParsing'
 import { bytesToFormGigabytes, formatBytes, gbToBytes } from '@/utils/formatByte'
 import { invalidateUserMetricsQueries, upsertUserInUsersCache } from '@/utils/usersCache'
 import { generateWireGuardKeyPair, getWireGuardPublicKey } from '@/utils/wireguard'
+import { hasPermission, hasScopeAll } from '@/utils/rbac'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, CalendarPlus, ChevronDown, EllipsisVertical, Fingerprint, Info, Layers, Link2Off, ListStart, Lock, Network, PieChart, RefreshCcw, Group, Users, Pencil, UserRoundPlus } from 'lucide-react'
+import {
+  CalendarClock,
+  CalendarPlus,
+  ChevronDown,
+  EllipsisVertical,
+  Fingerprint,
+  Info,
+  Layers,
+  Link2Off,
+  ListStart,
+  Lock,
+  Network,
+  PieChart,
+  RefreshCcw,
+  Group,
+  Users,
+  Pencil,
+  UserRoundPlus,
+} from 'lucide-react'
 import React, { useEffect, useState } from 'react'
 import { UseFormReturn } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -100,7 +121,6 @@ const ExpiryDateField = ({
 }) => {
   const { t } = useTranslation()
   const expireInfo = useRelativeExpiryDate(displayDate ? Math.floor(displayDate.getTime() / 1000) : null)
-  const dir = useDirDetection()
 
   const handleDateChange = React.useCallback(
     (date: Date | undefined) => {
@@ -188,8 +208,7 @@ const ExpiryDateField = ({
             <p
               className={cn(
                 fieldName !== 'on_hold_timeout' && 'lg:w-48',
-                'text-muted-foreground absolute top-full right-0 mt-1 text-end text-xs whitespace-nowrap lg:overflow-hidden lg:text-ellipsis',
-                dir === 'rtl' ? 'right-0' : 'left-0',
+                'text-muted-foreground absolute top-full right-0 left-0 mt-1 text-end text-xs whitespace-nowrap lg:overflow-hidden lg:text-ellipsis',
               )}
             >
               {(() => {
@@ -304,16 +323,24 @@ const StatusSelectItem = ({ value, children, onSelect }: StatusSelectItemProps) 
 function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserId, editingUserData, onSuccessCallback }: UserModalProps) {
   const { t, i18n } = useTranslation()
   const { admin } = useAdmin()
-  const isSudo = admin?.is_sudo ?? false
+  const canViewAllUserIps = hasScopeAll(admin, 'users', 'read')
+  const canUseResetStrategy = admin?.role?.features?.can_use_reset_strategy !== false
+  const canUseNextPlan = admin?.role?.features?.can_use_next_plan !== false
+  const requireTemplateForCreate = !editingUser && admin?.role?.access?.require_template === true
+  const canUseUserTemplates = hasPermission(admin, 'templates', 'read_simple')
+  const showTemplateTab = canUseUserTemplates || requireTemplateForCreate
   const dir = useDirDetection()
   const handleError = useDynamicErrorHandler()
   const [loading, setLoading] = useState(false)
   const status = form.watch('status')
   const [activeTab, setActiveTab] = useState<'groups' | 'templates'>('groups')
-  const tabs = [
-    { id: 'groups', label: 'groups', icon: Group },
-    { id: 'templates', label: 'templates.title', icon: Layers },
-  ]
+  const tabs = React.useMemo(
+    () => [
+      ...(requireTemplateForCreate ? [] : [{ id: 'groups' as const, label: 'groups', icon: Group }]),
+      ...(showTemplateTab ? [{ id: 'templates' as const, label: 'templates.title', icon: Layers }] : []),
+    ],
+    [requireTemplateForCreate, showTemplateTab],
+  )
   const [nextPlanEnabled, setNextPlanEnabled] = useState(false)
   const [nextPlanManuallyDisabled, setNextPlanManuallyDisabled] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null)
@@ -411,7 +438,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
         }
         setTouchedFields({})
         setIsFormValid(false)
-        setActiveTab('groups')
+        setActiveTab(requireTemplateForCreate ? 'templates' : 'groups')
         setSelectedTemplateId(null)
         setNextPlanEnabled(false)
         setNextPlanManuallyDisabled(false)
@@ -419,7 +446,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
       }
       onOpenChange(open)
     },
-    [form, onOpenChange, editingUser, nextPlanEnabled],
+    [form, onOpenChange, editingUser, nextPlanEnabled, requireTemplateForCreate],
   )
 
   const handleFieldChange = React.useCallback(
@@ -467,11 +494,36 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
         gcTime: 0,
         refetchOnMount: true,
         refetchOnReconnect: false,
-        enabled: isDialogOpen,
+        enabled: isDialogOpen && canUseUserTemplates,
       },
     },
   )
   const templateOptions = templatesData?.templates || []
+
+  useEffect(() => {
+    if (!isDialogOpen) return
+
+    if (requireTemplateForCreate && activeTab !== 'templates') {
+      setActiveTab('templates')
+      return
+    }
+
+    if (!tabs.some(tab => tab.id === activeTab)) {
+      setActiveTab(tabs[0]?.id ?? 'groups')
+    }
+  }, [activeTab, isDialogOpen, requireTemplateForCreate, tabs])
+
+  useEffect(() => {
+    if (canUseResetStrategy) return
+    form.setValue('data_limit_reset_strategy', 'no_reset', { shouldDirty: false, shouldValidate: false })
+  }, [canUseResetStrategy, form])
+
+  useEffect(() => {
+    if (canUseNextPlan) return
+    if (nextPlanEnabled) setNextPlanEnabled(false)
+    form.setValue('next_plan', undefined, { shouldDirty: false, shouldValidate: false })
+    setNextPlanManuallyDisabled(false)
+  }, [canUseNextPlan, form, nextPlanEnabled])
 
   // Prefetch lightweight groups while modal is open so the Groups tab can render immediately.
   useGetGroupsSimple(
@@ -613,6 +665,11 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
   }, [status, form])
 
   useEffect(() => {
+    if (!canUseNextPlan) {
+      form.setValue('next_plan', undefined, { shouldValidate: false, shouldDirty: false })
+      return
+    }
+
     if (!nextPlanEnabled) {
       const currentNextPlan = form.getValues('next_plan')
       if (currentNextPlan !== null && currentNextPlan !== undefined) {
@@ -644,10 +701,10 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
       }
       setNextPlanManuallyDisabled(false)
     }
-  }, [nextPlanEnabled, form, handleFieldChange])
+  }, [canUseNextPlan, nextPlanEnabled, form, handleFieldChange])
 
   useEffect(() => {
-    if (!isDialogOpen || !editingUser) return
+    if (!isDialogOpen || !editingUser || !canUseNextPlan) return
 
     // Check both form values and editingUserData prop for next_plan
     const nextPlanFromForm = form.getValues('next_plan')
@@ -673,7 +730,19 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
       setNextPlanEnabled(true)
       setNextPlanManuallyDisabled(false)
     }
-  }, [isDialogOpen, editingUser, hasNextPlanData, nextPlanManuallyDisabled, form, nextPlanUserTemplateId, nextPlanExpire, nextPlanDataLimit, nextPlanAddRemainingTraffic, editingUserData])
+  }, [
+    isDialogOpen,
+    editingUser,
+    canUseNextPlan,
+    hasNextPlanData,
+    nextPlanManuallyDisabled,
+    form,
+    nextPlanUserTemplateId,
+    nextPlanExpire,
+    nextPlanDataLimit,
+    nextPlanAddRemainingTraffic,
+    editingUserData,
+  ])
 
   // Helper to clear group selection
   const clearGroups = () => form.setValue('group_ids', [])
@@ -683,6 +752,15 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
   // Update validateAllFields function
   const validateAllFields = (currentValues: any, touchedFields: any, isSubmit: boolean = false) => {
     try {
+      if (requireTemplateForCreate && !selectedTemplateId) {
+        form.clearErrors()
+        form.setError('user_template_id' as any, {
+          type: 'manual',
+          message: t('validation.required', { field: t('userDialog.selectTemplate', { defaultValue: 'Select Template' }) }),
+        })
+        return false
+      }
+
       // Special case for template mode
       if (selectedTemplateId) {
         // In template mode, only validate username
@@ -791,7 +869,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
             }
             if (fieldName === 'group_ids') {
               message = t('validation.required', { field: t('groups', { defaultValue: 'Groups' }) })
-            } else if (fieldName === 'on_hold_expire_duration') {
+            } else if (fieldName === 'on_hold_expire_duration' && message === 'validation.required') {
               message = t('validation.required', { field: t('templates.expire') })
             }
             form.setError(fieldName as any, {
@@ -895,6 +973,12 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
           return
         }
 
+        if (requireTemplateForCreate) {
+          toast.error(t('validation.required', { field: t('userDialog.selectTemplate', { defaultValue: 'Select Template' }) }))
+          setActiveTab('templates')
+          return
+        }
+
         // Regular create/edit flow
         if (!validateAllFields(values, touchedFields, true)) {
           // Show toast for validation errors
@@ -984,13 +1068,15 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
           ...preparedValues,
           data_limit: gbToBytes(normalizedDataLimitGb as any),
           hwid_limit: preparedValues.hwid_limit == null ? null : Number.isFinite(Number(preparedValues.hwid_limit)) ? Math.round(Number(preparedValues.hwid_limit)) : null,
-          data_limit_reset_strategy: hasDataLimit ? preparedValues.data_limit_reset_strategy : 'no_reset',
+          data_limit_reset_strategy: canUseResetStrategy && hasDataLimit ? preparedValues.data_limit_reset_strategy : 'no_reset',
           expire: preparedValues.expire,
           ...(hasProxySettings ? { proxy_settings: cleanedProxySettings } : {}),
         }
 
         // Handle next_plan based on switch state
-        if (nextPlanEnabled) {
+        if (!canUseNextPlan) {
+          delete sendValues.next_plan
+        } else if (nextPlanEnabled) {
           // Switch is ON - always send next_plan with defaults or existing data
           const nextPlan = values.next_plan || form.getValues('next_plan') || {}
 
@@ -1022,10 +1108,29 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
         // Make API calls to the backend
         if (editingUser && editingUserId) {
           try {
-            await modifyUserMutation.mutateAsync({
-              userId: editingUserId,
-              data: sendValues,
-            })
+            const originalStatus = editingUserData?.status
+            const requestedStatus = sendValues.status
+            const statusWasChanged = !!touchedFields.status && requestedStatus !== originalStatus
+            const onlyStatusWasTouched = Object.entries(touchedFields).every(([field, touched]) => !touched || field === 'status')
+            const disabledToggle = statusWasChanged && requestedStatus === 'disabled' ? true : statusWasChanged && originalStatus === 'disabled' && requestedStatus === 'active' ? false : undefined
+
+            if (disabledToggle === undefined) {
+              if (!touchedFields.status) {
+                delete sendValues.status
+              }
+              await modifyUserMutation.mutateAsync({
+                userId: editingUserId,
+                data: sendValues,
+              })
+            } else {
+              const modifyPayload = { ...sendValues }
+              delete modifyPayload.status
+              if (!onlyStatusWasTouched) {
+                await modifyUserById(editingUserId, modifyPayload)
+              }
+              const updatedUser = await setUserDisabledById(editingUserId, { disabled: disabledToggle })
+              syncUserCacheFromApiResponse(updatedUser, { allowInsert: true, notifySuccessCallback: true })
+            }
             toast.success(
               t('userDialog.userEdited', {
                 username: values.username,
@@ -1069,7 +1174,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
         setLoading(false)
       }
     },
-    [editingUser, editingUserId, form, handleTemplateMutation, onOpenChange, selectedTemplateId, status, t, touchedFields],
+    [canUseNextPlan, canUseResetStrategy, editingUser, editingUserId, form, handleTemplateMutation, onOpenChange, requireTemplateForCreate, selectedTemplateId, status, t, touchedFields],
   )
 
   // Helper for cryptographically secure random integer
@@ -1115,23 +1220,24 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
     return arr.join('')
   }
 
-  // Add this function after the generatePassword function
-  function generateProxySettings() {
-    return {
-      vmess: {
-        id: uuidv4(),
-      },
-      vless: {
-        id: uuidv4(),
-      },
-      trojan: {
-        password: generatePassword(),
-      },
-      shadowsocks: {
-        password: generatePassword(),
+  const generateAllProxySettings = React.useCallback(() => {
+    const keyPair = generateWireGuardKeyPair()
+    const newSettings = {
+      vmess: { id: uuidv4() },
+      vless: { id: uuidv4() },
+      trojan: { password: generatePassword() },
+      shadowsocks: { password: generatePassword() },
+      hysteria: { auth: uuidv4() },
+      wireguard: {
+        private_key: keyPair.privateKey,
+        public_key: keyPair.publicKey,
+        peer_ips: form.getValues('proxy_settings.wireguard.peer_ips') ?? [],
       },
     }
-  }
+    form.setValue('proxy_settings', newSettings as any, { shouldDirty: true, shouldValidate: true })
+    handleFieldChange('proxy_settings', newSettings)
+    toast.success(t('userDialog.proxySettings.allGenerated', { defaultValue: 'All proxy credentials regenerated' }))
+  }, [form, handleFieldChange, t])
 
   const generateWireGuardProxySettings = React.useCallback(() => {
     const keyPair = generateWireGuardKeyPair()
@@ -1232,19 +1338,9 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
     [hasMeaningfulProxyValue],
   )
 
-  // Add this button component after the username generate button
+  // Regenerate all proxy credentials (VMess, VLESS, Trojan, Shadowsocks, Hysteria, WireGuard)
   const GenerateProxySettingsButton = () => (
-    <Button
-      size="icon"
-      type="button"
-      variant="ghost"
-      onClick={() => {
-        const newSettings = generateProxySettings()
-        form.setValue('proxy_settings', newSettings)
-        handleFieldChange('proxy_settings', newSettings)
-      }}
-      title="Generate proxy settings"
-    >
+    <Button size="icon" type="button" variant="outline" onClick={generateAllProxySettings} className="flex items-center gap-1.5 border-0 text-xs">
       <RefreshCcw className="h-3 w-3" />
     </Button>
   )
@@ -1517,8 +1613,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
                     <div className="flex w-full flex-col gap-4">
                       {(() => {
                         const dataLimitValue = form.watch('data_limit')
-                        const showResetStrategy =
-                          !selectedTemplateId && dataLimitValue !== undefined && dataLimitValue !== null && Number(dataLimitValue) > 0
+                        const showResetStrategy = canUseResetStrategy && !selectedTemplateId && dataLimitValue !== undefined && dataLimitValue !== null && Number(dataLimitValue) > 0
                         return (
                           <div className={cn('flex w-full flex-col gap-4 lg:flex-row lg:items-start')}>
                             {!selectedTemplateId && (
@@ -1655,14 +1750,17 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
                             <FormItem className="relative w-full min-w-0">
                               <FormLabel>{t('userDialog.hwidLimit', { defaultValue: 'HWID Limit' })}</FormLabel>
                               <FormControl>
-                                <DecimalInput
-                                  placeholder={t('userDialog.hwidLimitPlaceholder', { defaultValue: 'Empty for default, 0 for unlimited' })}
-                                  value={field.value}
-                                  emptyValue={undefined}
-                                  zeroValue={0}
-                                  keepZeroOnBlur
-                                  normalizeDisplayValueOnBlur={Math.floor}
-                                  onValueChange={value => {
+                                <Input
+                                  placeholder={t('userDialog.hwidLimitPlaceholder', { defaultValue: 'Empty = default, 0 = unlimited' })}
+                                  value={field.value ?? ''}
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  onBlur={field.onBlur}
+                                  onChange={event => {
+                                    const nextValue = event.target.value.trim()
+                                    if (!/^\d*$/.test(nextValue)) return
+
+                                    const value = nextValue === '' ? null : Number(nextValue)
                                     field.onChange(value)
                                     handleFieldChange('hwid_limit', value)
                                   }}
@@ -2065,7 +2163,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
                     </Accordion>
                   )}
                   {/* Next Plan Section (toggleable) */}
-                  {activeTab === 'groups' && editingUser && (
+                  {activeTab === 'groups' && editingUser && canUseNextPlan && (
                     <div className="border-border rounded-(--radius) border p-4">
                       <div className="flex items-center justify-between">
                         <div
@@ -2239,7 +2337,13 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
                     </div>
                     <div className="py-2">
                       {activeTab === 'templates' &&
-                        (templatesLoading ? (
+                        (!canUseUserTemplates ? (
+                          <div className="border-destructive/30 bg-destructive/5 text-destructive rounded-md border p-3 text-sm">
+                            {t('userDialog.templatePermissionRequired', {
+                              defaultValue: 'Template selection requires user template selector access for this role.',
+                            })}
+                          </div>
+                        ) : templatesLoading ? (
                           <div>{t('Loading...', { defaultValue: 'Loading...' })}</div>
                         ) : (
                           <div className="space-y-4 pt-4">
@@ -2320,7 +2424,7 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
                     onPointerDownOutside={() => setActionsMenuOpen(false)}
                     onInteractOutside={() => setActionsMenuOpen(false)}
                   >
-                    {isSudo && (
+                    {canViewAllUserIps && (
                       <DropdownMenuItem
                         onSelect={() => {
                           setActionsMenuOpen(false)
@@ -2489,7 +2593,9 @@ function UserModal({ isDialogOpen, onOpenChange, form, editingUser, editingUserI
         </AlertDialogContent>
       </AlertDialog>
 
-      {isSudo && currentUsername && <UserAllIPsModal isOpen={isUserAllIPsModalOpen} onOpenChange={setUserAllIPsModalOpen} username={currentUsername} />}
+      {canViewAllUserIps && currentUserId && currentUsername && (
+        <UserAllIPsModal isOpen={isUserAllIPsModalOpen} onOpenChange={setUserAllIPsModalOpen} userId={currentUserId} username={currentUsername} />
+      )}
       {currentUserId && <UsageModal open={isUsageModalOpen} onClose={() => setUsageModalOpen(false)} userId={currentUserId} />}
       {currentUserId && <UserHwidsModal isOpen={isHwidsModalOpen} onOpenChange={setHwidsModalOpen} userId={currentUserId} username={currentUsername} />}
       {currentUserId && <UserSubscriptionClientsModal isOpen={isSubscriptionClientsModalOpen} onOpenChange={setSubscriptionClientsModalOpen} userId={currentUserId} username={currentUsername} />}

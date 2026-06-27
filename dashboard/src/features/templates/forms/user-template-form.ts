@@ -4,6 +4,8 @@ import type { TFunction } from 'i18next'
 import type { FieldError, FieldErrors, Resolver } from 'react-hook-form'
 import { z } from 'zod'
 
+const MAX_ON_HOLD_EXPIRE_DURATION_SECONDS = 2_147_483_647
+
 const userTemplateFormObjectSchema = z.object({
   name: z.string().min(1, 'validation.required'),
   status: z.enum([UserStatusCreate.active, UserStatusCreate.on_hold]).default(UserStatusCreate.active),
@@ -11,7 +13,7 @@ const userTemplateFormObjectSchema = z.object({
   username_suffix: z.string().optional(),
   data_limit: z.number().min(0).optional(),
   hwid_limit: z.number().min(0).nullable().optional(),
-  expire_duration: z.number().min(0).optional(),
+  expire_duration: z.number().min(0).max(MAX_ON_HOLD_EXPIRE_DURATION_SECONDS).optional(),
   on_hold_timeout: z.number().optional(),
   method: z
     .enum([ShadowsocksMethods['aes-128-gcm'], ShadowsocksMethods['aes-256-gcm'], ShadowsocksMethods['chacha20-ietf-poly1305'], ShadowsocksMethods['xchacha20-poly1305']])
@@ -53,7 +55,7 @@ export const userTemplateFormDefaultValues: Partial<UserTemplatesFromValueInput>
   username_prefix: '',
   username_suffix: '',
   data_limit: 0,
-  hwid_limit: undefined,
+  hwid_limit: null,
   expire_duration: 0,
   method: ShadowsocksMethods['chacha20-ietf-poly1305'],
   on_hold_timeout: undefined,
@@ -72,14 +74,7 @@ export function createUserTemplateFormResolver(t: TFunction): Resolver<UserTempl
       const err = errors[key] as FieldError | undefined
       if (err && typeof err === 'object' && err.message === 'validation.required') {
         const fieldName = String(key)
-        const fieldLabelKey =
-          fieldName === 'name'
-            ? 'templates.name'
-            : fieldName === 'expire_duration'
-              ? 'templates.expire'
-              : fieldName === 'groups'
-                ? 'templates.groups'
-                : `fields.${fieldName}`
+        const fieldLabelKey = fieldName === 'name' ? 'templates.name' : fieldName === 'expire_duration' ? 'templates.expire' : fieldName === 'groups' ? 'templates.groups' : `fields.${fieldName}`
         ;(errors as Record<string, FieldError | undefined>)[fieldName] = {
           ...err,
           message: t('validation.required', { field: t(fieldLabelKey, { defaultValue: fieldName }) }),

@@ -21,7 +21,8 @@ from app.models.user import SubscriptionUserResponse, UsersResponseWithInbounds
 from app.settings import hwid_settings, subscription_settings
 from app.subscription.share import encode_title, generate_subscription, setup_format_variables
 from app.templates import render_template
-from config import template_settings, wireguard_settings
+from app.utils.hwid import resolve_effective_hwid_settings
+from config import template_settings
 
 from . import BaseOperation
 from .user import UserOperation
@@ -276,22 +277,70 @@ class SubscriptionOperation(BaseOperation):
             config["media_type"],
         )
 
+    @staticmethod
+    def is_hwid_enabled(
+        global_hwid_conf: HWIDSettings,
+        effective_hwid_conf: HWIDSettings | None,
+        user_hwid_limit: int | None,
+        *,
+        is_manual_sub: bool = False,
+    ) -> bool:
+        if effective_hwid_conf is None or not effective_hwid_conf.enabled:
+            return False
+
+        forced = effective_hwid_conf.forced
+        if is_manual_sub and not global_hwid_conf.require_hwid_for_manual_sub:
+            forced = False
+
+        return forced or (user_hwid_limit is not None and user_hwid_limit > 0)
+
+    async def is_user_hwid_enabled(self, db_user: User, *, is_manual_sub: bool = False) -> bool:
+        role_hwid_settings = db_user.admin.role.hwid if db_user.admin and db_user.admin.role else None
+        global_hwid_conf: HWIDSettings = await hwid_settings()
+        effective_hwid_conf = resolve_effective_hwid_settings(global_hwid_conf, role_hwid_settings)
+        return self.is_hwid_enabled(
+            global_hwid_conf,
+            effective_hwid_conf,
+            db_user.hwid_limit,
+            is_manual_sub=is_manual_sub,
+        )
+
     async def validate_and_register_hwid(
         self,
         db: AsyncSession,
         user_id: int,
         user_hwid_limit: int | None,
+        role_hwid_settings: HWIDSettings | dict | None,
         x_hwid: str | None,
         x_device_os: str | None,
         x_ver_os: str | None,
         x_device_model: str | None,
+        is_manual_sub: bool = False,
     ):
-        hwid_conf: HWIDSettings = await hwid_settings()
-        if not hwid_conf.enabled:
+        global_hwid_conf: HWIDSettings = await hwid_settings()
+        effective_hwid_conf = resolve_effective_hwid_settings(global_hwid_conf, role_hwid_settings)
+
+        if not self.is_hwid_enabled(
+            global_hwid_conf,
+            effective_hwid_conf,
+            user_hwid_limit,
+            is_manual_sub=is_manual_sub,
+        ):
+            return
+
+        forced = effective_hwid_conf.forced
+        if is_manual_sub and not global_hwid_conf.require_hwid_for_manual_sub:
+            forced = False
+
+        limit = user_hwid_limit
+        if forced and limit is None:
+            limit = effective_hwid_conf.fallback_limit
+
+        if not forced and limit is None:
             return
 
         if not x_hwid:
-            if hwid_conf.forced:
+            if forced:
                 await self.raise_error(message="HWID header required", code=403)
             return
 
@@ -301,10 +350,7 @@ class SubscriptionOperation(BaseOperation):
             return
 
         # It's a new HWID, check limit
-        limit = user_hwid_limit if user_hwid_limit is not None else hwid_conf.fallback_limit
-        if limit == 0:
-            pass  # unlimited
-        else:
+        if limit is not None and limit > 0:
             current_count = await get_user_hwid_count(db, user_id)
             if current_count >= limit:
                 await self.raise_error(message="Device limit reached", code=403)
@@ -328,19 +374,21 @@ class SubscriptionOperation(BaseOperation):
         Provides a subscription link based on the user agent (Clash, V2Ray, etc.).
         """
         sub_settings: SubSettings = await subscription_settings()
-        db_user = await self.get_validated_sub(db, token)
+        db_user = await self.get_validated_sub(db, token, load_admin_role=True)
+        role_hwid_settings = db_user.admin.role.hwid if db_user.admin and db_user.admin.role else None
         user = await self.validated_user(db_user)
         is_browser_request = "text/html" in accept_header
         is_subscription_page_request = is_browser_request and not sub_settings.disable_sub_template
-
         if is_subscription_page_request:
+            is_hwid_enabled = await self.is_user_hwid_enabled(db_user)
             template = (
                 db_user.admin.sub_template
                 if db_user.admin and db_user.admin.sub_template
                 else template_settings.subscription_page_template
             )
+            is_allow_browser_config = sub_settings.allow_browser_config and not is_hwid_enabled
             links = []
-            if sub_settings.allow_browser_config:
+            if is_allow_browser_config:
                 conf, media_type = await self.fetch_config(
                     user,
                     ConfigFormat.links,
@@ -354,19 +402,24 @@ class SubscriptionOperation(BaseOperation):
                 render_template(
                     template,
                     self._build_subscription_body_payload(
-                        user, links, formatted_announce, sub_settings, format_variables
+                        user, links, formatted_announce, sub_settings, format_variables, is_hwid_enabled
                     ),
                 )
             )
         else:
             await self.validate_and_register_hwid(
-                db, db_user.id, db_user.hwid_limit, x_hwid, x_device_os, x_ver_os, x_device_model
+                db,
+                db_user.id,
+                db_user.hwid_limit,
+                role_hwid_settings,
+                x_hwid,
+                x_device_os,
+                x_ver_os,
+                x_device_model,
             )
             matched_rule = self.detect_client_rule(user_agent, sub_settings.rules)
             client_type = matched_rule.target if matched_rule else None
             if client_type == ConfigFormat.block or not client_type:
-                await self.raise_error(message="Client not supported", code=406)
-            if client_type == ConfigFormat.wireguard and not wireguard_settings.enabled:
                 await self.raise_error(message="Client not supported", code=406)
 
             # Update user subscription info
@@ -425,7 +478,6 @@ class SubscriptionOperation(BaseOperation):
         token: str,
         client_type: ConfigFormat,
         request_url: str = "",
-        accept_header: str = "",
         x_hwid: str | None = None,
         x_device_os: str | None = None,
         x_ver_os: str | None = None,
@@ -434,16 +486,21 @@ class SubscriptionOperation(BaseOperation):
         """Provides a subscription link based on the specified client type (e.g., Clash, V2Ray)."""
         sub_settings: SubSettings = await subscription_settings()
 
-        if client_type == ConfigFormat.wireguard and not wireguard_settings.enabled:
-            await self.raise_error(message="Client not supported", code=406)
-
         if client_type == ConfigFormat.block or not getattr(sub_settings.manual_sub_request, client_type):
             await self.raise_error(message="Client not supported", code=406)
-        db_user = await self.get_validated_sub(db, token=token)
+        db_user = await self.get_validated_sub(db, token=token, load_admin_role=True)
         user = await self.validated_user(db_user)
 
         await self.validate_and_register_hwid(
-            db, db_user.id, db_user.hwid_limit, x_hwid, x_device_os, x_ver_os, x_device_model
+            db,
+            db_user.id,
+            db_user.hwid_limit,
+            db_user.admin.role.hwid if db_user.admin and db_user.admin.role else None,
+            x_hwid,
+            x_device_os,
+            x_ver_os,
+            x_device_model,
+            is_manual_sub=True,
         )
 
         response_headers = self.create_response_headers(
@@ -470,13 +527,18 @@ class SubscriptionOperation(BaseOperation):
         formatted_announce: str,
         sub_settings: SubSettings,
         format_variables: dict,
+        is_hwid_enabled: bool,
     ) -> dict[str, Any]:
         return {
-            "user": user,
+            "user": SubscriptionUserResponse.model_validate(user),
             "links": links,
             "announce": formatted_announce,
             "announce_url": sub_settings.announce_url,
-            "apps": self._make_apps_import_urls(sub_settings.applications, format_variables),
+            "apps": self._make_apps_import_urls(
+                sub_settings.applications,
+                format_variables,
+                is_hwid_enabled=is_hwid_enabled,
+            ),
         }
 
     def _build_raw_subscription_payload(
@@ -487,18 +549,20 @@ class SubscriptionOperation(BaseOperation):
         sub_settings: SubSettings,
         format_variables: dict,
         headers: dict[str, str],
+        is_hwid_enabled: bool,
     ) -> dict[str, Any]:
         return {
             "body": self._build_subscription_body_payload(
-                user, links, formatted_announce, sub_settings, format_variables
+                user, links, formatted_announce, sub_settings, format_variables, is_hwid_enabled
             ),
             "headers": headers,
         }
 
     async def user_subscription_raw(self, db: AsyncSession, token: str, request_url: str = ""):
         sub_settings: SubSettings = await subscription_settings()
-        db_user = await self.get_validated_sub(db, token)
+        db_user = await self.get_validated_sub(db, token, load_admin_role=True)
         user = await self.validated_user(db_user)
+        is_hwid_enabled = await self.is_user_hwid_enabled(db_user)
 
         links = []
         if sub_settings.allow_browser_config:
@@ -524,6 +588,7 @@ class SubscriptionOperation(BaseOperation):
             sub_settings,
             format_variables,
             response_headers,
+            is_hwid_enabled,
         )
 
     async def user_subscription_by_user(
@@ -532,9 +597,6 @@ class SubscriptionOperation(BaseOperation):
         client_type: ConfigFormat,
         request_url: str = "",
     ):
-        if client_type == ConfigFormat.wireguard and not wireguard_settings.enabled:
-            await self.raise_error(message="Client not supported", code=406)
-
         if client_type == ConfigFormat.block:
             await self.raise_error(message="Client not supported", code=406)
 
@@ -585,18 +647,30 @@ class SubscriptionOperation(BaseOperation):
         """
         Get available applications for user's subscription.
         """
-        user, _ = await self.user_subscription_info(db, token)
+        db_user = await self.get_validated_sub(db, token=token, load_admin_role=True)
+        user = await self.validated_user(db_user)
+        is_hwid_enabled = await self.is_user_hwid_enabled(db_user)
         sub_settings: SubSettings = await subscription_settings()
         format_variables = await self.get_format_variables(user)
-        return self._make_apps_import_urls(sub_settings.applications, format_variables)
+        return self._make_apps_import_urls(
+            sub_settings.applications,
+            format_variables,
+            is_hwid_enabled=is_hwid_enabled,
+        )
 
-    def _make_apps_import_urls(self, applications: list[Application], format_variables: dict) -> list[Application]:
+    def _make_apps_import_urls(
+        self, applications: list[Application], format_variables: dict, *, is_hwid_enabled: bool
+    ) -> list[Application]:
         apps_with_updated_urls = []
         for app in applications:
             updated_app = app.model_copy()
             import_url = app.import_url.format_map(format_variables)
             updated_app.import_url = import_url
-            apps_with_updated_urls.append(updated_app)
+            if is_hwid_enabled:
+                if app.show_when_hwid_enabled:
+                    apps_with_updated_urls.append(updated_app)
+            else:
+                apps_with_updated_urls.append(updated_app)
 
         return apps_with_updated_urls
 

@@ -17,6 +17,8 @@ interface GroupProps {
   group: GroupResponse
   onEdit: (group: GroupResponse) => void
   onToggleStatus: (group: GroupResponse) => Promise<void>
+  canUpdate?: boolean
+  canDelete?: boolean
   selectionControl?: ReactNode
   selected?: boolean
 }
@@ -45,7 +47,7 @@ const DeleteAlertDialog = ({ group, isOpen, onClose, onConfirm }: { group: Group
   )
 }
 
-export default function Group({ group, onEdit, onToggleStatus, selectionControl, selected = false }: GroupProps) {
+export default function Group({ group, onEdit, onToggleStatus, canUpdate = true, canDelete = true, selectionControl, selected = false }: GroupProps) {
   const { t } = useTranslation()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const deleteGroupMutation = useRemoveGroup()
@@ -57,6 +59,8 @@ export default function Group({ group, onEdit, onToggleStatus, selectionControl,
   }
 
   const handleConfirmDelete = async () => {
+    if (!canDelete) return
+
     try {
       await deleteGroupMutation.mutateAsync({ groupId: group.id })
       toast.success(t('success', { defaultValue: 'Success' }), {
@@ -79,7 +83,12 @@ export default function Group({ group, onEdit, onToggleStatus, selectionControl,
 
   return (
     <>
-      <Card className={cn('group relative cursor-pointer px-4 py-5 transition-colors hover:bg-accent', selected && 'border-primary/50 bg-accent/30')} onClick={() => onEdit(group)}>
+      <Card
+        className={cn('group relative px-4 py-5 transition-colors', canUpdate && 'hover:bg-accent cursor-pointer', selected && 'border-primary/50 bg-accent/30')}
+        onClick={() => {
+          if (canUpdate) onEdit(group)
+        }}
+      >
         <div className="flex items-start gap-3">
           {selectionControl ? <div className="pt-1">{selectionControl}</div> : null}
           <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -88,52 +97,60 @@ export default function Group({ group, onEdit, onToggleStatus, selectionControl,
                 <div className={cn('min-h-2 min-w-2 flex-shrink-0 rounded-full', group.is_disabled ? 'bg-red-500' : 'bg-green-500')} />
                 <div className="flex min-w-0 flex-1 items-center gap-2">
                   <div className="min-w-0 truncate font-medium">{group.name}</div>
-                  <div className="flex-shrink-0 font-mono text-xs text-muted-foreground">({group.inbound_tags?.length || 0})</div>
+                  <div className="text-muted-foreground flex-shrink-0 font-mono text-xs">({group.inbound_tags?.length || 0})</div>
                 </div>
               </div>
-              <div className="min-w-0 truncate text-sm text-muted-foreground">
+              <div className="text-muted-foreground min-w-0 truncate text-sm">
                 {t('admins.total.users')}: {group.total_users || 0}
               </div>
             </div>
-            <div onClick={e => e.stopPropagation()}>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button type="button" variant="ghost" size="icon">
-                    <MoreVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onSelect={e => {
-                      e.stopPropagation()
-                      onToggleStatus(group)
-                    }}
-                  >
-                    {group.is_disabled ? <Power className="mr-2 h-4 w-4" /> : <PowerOff className="mr-2 h-4 w-4" />}
-                    {group.is_disabled ? t('enable') : t('disable')}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={e => {
-                      e.stopPropagation()
-                      onEdit(group)
-                    }}
-                  >
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {t('edit')}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={handleDeleteClick} className="text-destructive">
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {t('delete')}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+            {(canUpdate || canDelete) && (
+              <div onClick={e => e.stopPropagation()}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="ghost" size="icon">
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {canUpdate && (
+                      <>
+                        <DropdownMenuItem
+                          onSelect={e => {
+                            e.stopPropagation()
+                            onToggleStatus(group)
+                          }}
+                        >
+                          {group.is_disabled ? <Power className="mr-2 h-4 w-4" /> : <PowerOff className="mr-2 h-4 w-4" />}
+                          {group.is_disabled ? t('enable') : t('disable')}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onSelect={e => {
+                            e.stopPropagation()
+                            onEdit(group)
+                          }}
+                        >
+                          <Pencil className="mr-2 h-4 w-4" />
+                          {t('edit')}
+                        </DropdownMenuItem>
+                      </>
+                    )}
+                    {canDelete && (
+                      <DropdownMenuItem onSelect={handleDeleteClick} className="text-destructive">
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t('delete')}
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
           </div>
         </div>
       </Card>
 
-      <DeleteAlertDialog group={group} isOpen={showDeleteDialog} onClose={() => setShowDeleteDialog(false)} onConfirm={handleConfirmDelete} />
+      {canDelete && <DeleteAlertDialog group={group} isOpen={showDeleteDialog} onClose={() => setShowDeleteDialog(false)} onConfirm={handleConfirmDelete} />}
     </>
   )
 }

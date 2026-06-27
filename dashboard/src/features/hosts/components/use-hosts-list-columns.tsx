@@ -10,9 +10,11 @@ interface UseHostsListColumnsProps {
   onEdit: (host: BaseHost) => void
   onDuplicate: (host: BaseHost) => Promise<void>
   onDataChanged: () => void
+  canUpdate?: boolean
+  canCreate?: boolean
 }
 
-export const useHostsListColumns = ({ onEdit, onDuplicate, onDataChanged }: UseHostsListColumnsProps) => {
+export const useHostsListColumns = ({ onEdit, onDuplicate, onDataChanged, canUpdate = true, canCreate = true }: UseHostsListColumnsProps) => {
   const { t } = useTranslation()
 
   return useMemo<ListColumn<BaseHost>[]>(
@@ -33,7 +35,7 @@ export const useHostsListColumns = ({ onEdit, onDuplicate, onDataChanged }: UseH
         header: t('address'),
         width: '1fr',
         cell: host => (
-          <span dir="ltr" className="truncate font-mono text-xs text-muted-foreground">
+          <span dir="ltr" className="text-muted-foreground truncate font-mono text-xs">
             {Array.isArray(host.address) ? host.address[0] || '' : (host.address ?? '')}:{host.port === null ? <Settings className="inline h-3 w-3" /> : host.port}
           </span>
         ),
@@ -43,18 +45,22 @@ export const useHostsListColumns = ({ onEdit, onDuplicate, onDataChanged }: UseH
         id: 'inbound',
         header: t('inbound'),
         width: '1fr',
-        cell: host => <span className="truncate text-xs text-muted-foreground">{host.inbound_tag ?? ''}</span>,
+        cell: host => <span className="text-muted-foreground truncate text-xs">{host.inbound_tag ?? ''}</span>,
         hideOnMobile: true,
       },
-      {
-        id: 'actions',
-        header: '',
-        width: '64px',
-        align: 'end',
-        hideOnMobile: true,
-        cell: host => <HostActionsMenu host={host} onEdit={onEdit} onDuplicate={onDuplicate} onDataChanged={onDataChanged} />,
-      },
+      ...(canUpdate || canCreate
+        ? [
+            {
+              id: 'actions',
+              header: '',
+              width: '64px',
+              align: 'end' as const,
+              hideOnMobile: true,
+              cell: (host: BaseHost) => <HostActionsMenu host={host} onEdit={onEdit} onDuplicate={onDuplicate} onDataChanged={onDataChanged} canUpdate={canUpdate} canCreate={canCreate} />,
+            },
+          ]
+        : []),
     ],
-    [t, onEdit, onDuplicate, onDataChanged],
+    [t, onEdit, onDuplicate, onDataChanged, canUpdate, canCreate],
   )
 }

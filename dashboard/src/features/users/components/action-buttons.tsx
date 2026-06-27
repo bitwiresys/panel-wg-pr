@@ -5,7 +5,7 @@ import useDirDetection from '@/hooks/use-dir-detection'
 import { type UseEditFormValues } from '@/features/users/forms/user-form'
 import { useActiveNextPlanById, useGetCurrentAdmin, useRemoveUserById, useResetUserDataUsageById, useRevokeUserSubscriptionById, UserResponse, UsersResponse } from '@/service/api'
 import { useQueryClient } from '@tanstack/react-query'
-import { Cat, Check, Copy, Cpu, EllipsisVertical, Fingerprint, GlobeLock, Link2Off, ListStart, ListTree, Network, Pencil, PieChart, QrCode, RefreshCcw, Trash2, UserCog, Users } from 'lucide-react'
+import { Cat, Check, Copy, EllipsisVertical, Fingerprint, GlobeLock, Hash, Link2Off, ListStart, ListTree, Network, Pencil, PieChart, QrCode, RefreshCcw, Trash2, UserCog, Users } from 'lucide-react'
 import { WireguardIcon, XrayIcon, SingboxIcon, MihomoIcon } from '@/components/icons/format-icons'
 import { Code } from 'lucide-react'
 import { FC, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -26,6 +26,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { invalidateUserMetricsQueries, removeUserFromUsersCache, upsertUserInUsersCache } from '@/utils/usersCache'
 import { buildSubscriptionFormatUrl, fetchSubscriptionBlobFromUrl, fetchUserSubscriptionContent, resolveSubscriptionPublicUrl, type SubscriptionContentFormat } from '@/utils/subscription-config'
+import { hasPermission, hasScopeAll } from '@/utils/rbac'
 
 type ActionButtonsProps = {
   user: UserResponse
@@ -197,7 +198,7 @@ const buildUserEditFormValues = (user: UserResponse): UseEditFormValues => ({
   username: user.username,
   status: user.status === 'active' || user.status === 'on_hold' || user.status === 'disabled' ? (user.status as UseEditFormValues['status']) : 'active',
   data_limit: user.data_limit ? bytesToFormGigabytes(Number(user.data_limit)) : 0,
-  hwid_limit: user.hwid_limit ?? undefined,
+  hwid_limit: user.hwid_limit ?? null,
   expire: normalizeDatePickerValueForEditForm(user.expire),
   note: user.note || '',
   data_limit_reset_strategy: user.data_limit_reset_strategy || undefined,
@@ -207,11 +208,11 @@ const buildUserEditFormValues = (user: UserResponse): UseEditFormValues => ({
   proxy_settings: user.proxy_settings || undefined,
   next_plan: user.next_plan
     ? {
-      user_template_id: user.next_plan.user_template_id ? Number(user.next_plan.user_template_id) : undefined,
-      data_limit: user.next_plan.data_limit ? Math.round(Number(user.next_plan.data_limit)) : 0,
-      expire: user.next_plan.expire ? Math.round(Number(user.next_plan.expire)) : 0,
-      add_remaining_traffic: user.next_plan.add_remaining_traffic || false,
-    }
+        user_template_id: user.next_plan.user_template_id ? Number(user.next_plan.user_template_id) : undefined,
+        data_limit: user.next_plan.data_limit ? Math.round(Number(user.next_plan.data_limit)) : 0,
+        expire: user.next_plan.expire ? Math.round(Number(user.next_plan.expire)) : 0,
+        add_remaining_traffic: user.next_plan.add_remaining_traffic || false,
+      }
     : undefined,
 })
 
@@ -288,7 +289,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
   const removeUserMutation = useRemoveUserById()
   const resetUserDataUsageMutation = useResetUserDataUsageById({
     mutation: {
-      onSuccess: (updatedUser) => {
+      onSuccess: updatedUser => {
         if (updatedUser) {
           updateUserInCache(updatedUser)
         }
@@ -297,7 +298,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
   })
   const revokeUserSubscriptionMutation = useRevokeUserSubscriptionById({
     mutation: {
-      onSuccess: (updatedUser) => {
+      onSuccess: updatedUser => {
         if (updatedUser) {
           updateUserInCache(updatedUser)
         }
@@ -306,7 +307,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
   })
   const activeNextMutation = useActiveNextPlanById({
     mutation: {
-      onSuccess: (updatedUser) => {
+      onSuccess: updatedUser => {
         if (updatedUser) {
           updateUserInCache(updatedUser)
         }
@@ -320,6 +321,13 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
       refetchOnMount: false,
     },
   })
+  const canUpdateUsers = hasPermission(currentAdmin, 'users', 'update')
+  const canUpdateAllUsers = hasScopeAll(currentAdmin, 'users', 'update')
+  const canReadAllUsers = hasScopeAll(currentAdmin, 'users', 'read')
+  const canDeleteUsers = hasPermission(currentAdmin, 'users', 'delete')
+  const topDropdownActionCount = (canUpdateUsers ? 1 : 0) + (canUpdateAllUsers ? 1 : 0) + (canReadAllUsers ? 1 : 0)
+  const middleDropdownActionCount = (canUpdateUsers ? 2 : 0) + 3 + (canUpdateUsers && user.next_plan ? 1 : 0) + (canReadAllUsers ? 1 : 0)
+  const destructiveDropdownActionCount = canDeleteUsers ? 1 : 0
 
   // Create form for user editing
   const userForm = useForm<UseEditFormValues>({
@@ -433,9 +441,9 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
     setSetOwnerModalOpen(true)
   }
 
-  const handleCopyCoreUsername = async () => {
+  const handleCopyUserId = async () => {
     try {
-      await navigator.clipboard.writeText(`${user.id}.${user.username}`)
+      await navigator.clipboard.writeText(String(user.id))
       toast.success(t('usersTable.copied', { defaultValue: 'Copied to clipboard' }))
     } catch (error) {
       toast.error(t('copyFailed', { defaultValue: 'Failed to copy content' }))
@@ -635,14 +643,12 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
   return (
     <>
       {renderActions && (
-        <div
-          className="flex items-center justify-end"
-          onClick={e => e.stopPropagation()}
-          onPointerDown={e => e.stopPropagation()}
-        >
-          <Button size="icon" variant="ghost" onClick={handleEdit} className="md:hidden">
-            <Pencil className="h-4 w-4" />
-          </Button>
+        <div className="flex items-center justify-end" onClick={e => e.stopPropagation()} onPointerDown={e => e.stopPropagation()}>
+          {canUpdateUsers && (
+            <Button size="icon" variant="ghost" onClick={handleEdit} className="md:hidden">
+              <Pencil className="h-4 w-4" />
+            </Button>
+          )}
           <TooltipProvider>
             <CopyButton
               value={subscriptionPublicUrl}
@@ -667,7 +673,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
                 </DropdownMenuTrigger>
                 <DropdownMenuContent>
                   {subscribeLinks.map((item, index) => (
-                    <DropdownMenuItem dir='ltr' key={index} onClick={() => handleCopyOrDownload(item.format, item.protocol)}>
+                    <DropdownMenuItem dir="ltr" key={index} onClick={() => handleCopyOrDownload(item.format, item.protocol)}>
                       <item.icon className="mr-2 h-4 w-4" />
                       {item.protocol}
                     </DropdownMenuItem>
@@ -680,13 +686,11 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
               <TooltipTrigger asChild>
                 <div>
                   <Button type="button" size="icon" variant="ghost" aria-label={t('qrcodeDialog.title')} onClick={onOpenSubscriptionModal}>
-                    <QrCode className='h-4 w-4' />
+                    <QrCode className="h-4 w-4" />
                   </Button>
                 </div>
               </TooltipTrigger>
-              <TooltipContent>
-                {t('qrcodeDialog.title')}
-              </TooltipContent>
+              <TooltipContent>{t('qrcodeDialog.title')}</TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <DropdownMenu modal={false} open={isActionsMenuOpen} onOpenChange={setActionsMenuOpen}>
@@ -701,41 +705,43 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
               onInteractOutside={() => setActionsMenuOpen(false)}
               onEscapeKeyDown={() => setActionsMenuOpen(false)}
             >
-              {/* Edit */}
-              <DropdownMenuItem className="hidden md:flex" onSelect={handleEdit}>
-                <Pencil className="mr-2 h-4 w-4" />
-                <span>{t('edit')}</span>
-              </DropdownMenuItem>
+              {canUpdateUsers && (
+                <DropdownMenuItem className="hidden md:flex" onSelect={handleEdit}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  <span>{t('edit')}</span>
+                </DropdownMenuItem>
+              )}
 
-              {/* Set Owner: only for sudo admins */}
-              {currentAdmin?.is_sudo && (
+              {canUpdateAllUsers && (
                 <DropdownMenuItem onSelect={handleSetOwner}>
                   <UserCog className="mr-2 h-4 w-4" />
                   <span>{t('setOwnerModal.title')}</span>
                 </DropdownMenuItem>
               )}
 
-              {/* Copy Core Username for sudo admins */}
-              {currentAdmin?.is_sudo && (
-                <DropdownMenuItem onSelect={handleCopyCoreUsername}>
-                  <Cpu className="mr-2 h-4 w-4" />
-                  <span>{t('coreUsername')}</span>
+              {canReadAllUsers && (
+                <DropdownMenuItem onSelect={handleCopyUserId}>
+                  <Hash className="mr-2 h-4 w-4" />
+                  <span>{t('copyUserId')}</span>
                 </DropdownMenuItem>
               )}
 
-              <DropdownMenuSeparator />
+              {topDropdownActionCount > 0 && middleDropdownActionCount > 0 && <DropdownMenuSeparator />}
 
               {/* Revoke Sub */}
-              <DropdownMenuItem onSelect={handleRevokeSubscription}>
-                <Link2Off className="mr-2 h-4 w-4" />
-                <span>{t('userDialog.revokeSubscription')}</span>
-              </DropdownMenuItem>
+              {canUpdateUsers && (
+                <DropdownMenuItem onSelect={handleRevokeSubscription}>
+                  <Link2Off className="mr-2 h-4 w-4" />
+                  <span>{t('userDialog.revokeSubscription')}</span>
+                </DropdownMenuItem>
+              )}
 
-              {/* Reset Usage */}
-              <DropdownMenuItem onSelect={handleResetUsage}>
-                <RefreshCcw className="mr-2 h-4 w-4" />
-                <span>{t('userDialog.resetUsage')}</span>
-              </DropdownMenuItem>
+              {canUpdateUsers && (
+                <DropdownMenuItem onSelect={handleResetUsage}>
+                  <RefreshCcw className="mr-2 h-4 w-4" />
+                  <span>{t('userDialog.resetUsage')}</span>
+                </DropdownMenuItem>
+              )}
 
               {/* Usage State */}
               <DropdownMenuItem onSelect={handleUsageState}>
@@ -744,7 +750,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
               </DropdownMenuItem>
 
               {/* Active Next Plan */}
-              {user.next_plan && (
+              {canUpdateUsers && user.next_plan && (
                 <DropdownMenuItem onSelect={handleActiveNextPlan}>
                   <ListStart className="mr-2 h-4 w-4" />
                   <span>{t('usersTable.activeNextPlanSubmit')}</span>
@@ -762,21 +768,22 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
                 <span>{t('hwids.title', { defaultValue: 'Hardware IDs' })}</span>
               </DropdownMenuItem>
 
-              {/* View All IPs: only for sudo admins */}
-              {currentAdmin?.is_sudo && (
+              {canReadAllUsers && (
                 <DropdownMenuItem onSelect={() => setUserAllIPsModalOpen(true)}>
                   <Network className="mr-2 h-4 w-4" />
                   <span>{t('userAllIPs.ipAddresses', { defaultValue: 'IP addresses' })}</span>
                 </DropdownMenuItem>
               )}
 
-              <DropdownMenuSeparator />
+              {middleDropdownActionCount > 0 && destructiveDropdownActionCount > 0 && <DropdownMenuSeparator />}
 
               {/* Trash */}
-              <DropdownMenuItem onSelect={handleDelete} className="text-red-600">
-                <Trash2 className="mr-2 h-4 w-4" />
-                <span>{t('remove')}</span>
-              </DropdownMenuItem>
+              {canDeleteUsers && (
+                <DropdownMenuItem onSelect={handleDelete} className="text-red-600">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  <span>{t('remove')}</span>
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -785,15 +792,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
       {isModalHost && (
         <div className="contents" onClick={e => e.stopPropagation()}>
           {/* Subscription Modal */}
-          {subscribeUrl && (
-            <SubscriptionModal
-              open={showSubscriptionModal}
-              subscribeUrl={subscribeUrl}
-              userId={user.id}
-              username={user.username}
-              onCloseModal={onCloseSubscriptionModal}
-            />
-          )}
+          {subscribeUrl && <SubscriptionModal open={showSubscriptionModal} subscribeUrl={subscribeUrl} userId={user.id} username={user.username} onCloseModal={onCloseSubscriptionModal} />}
 
           {/* Active Next Plan Confirm Dialog */}
           <AlertDialog open={isActiveNextPlanModalOpen} onOpenChange={setIsActiveNextPlanModalOpen}>
@@ -861,8 +860,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
 
           <UsageModal open={isUsageModalOpen} onClose={() => setUsageModalOpen(false)} userId={user.id} />
 
-          {/* SetOwnerModal: only for sudo admins */}
-          {currentAdmin?.is_sudo && (
+          {canUpdateAllUsers && (
             <SetOwnerModal
               open={isSetOwnerModalOpen}
               onClose={() => setSetOwnerModalOpen(false)}
@@ -878,22 +876,11 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
           )}
 
           {/* UserSubscriptionClientsModal */}
-          <UserSubscriptionClientsModal
-            isOpen={isSubscriptionClientsModalOpen}
-            onOpenChange={setSubscriptionClientsModalOpen}
-            userId={user.id}
-            username={user.username}
-          />
+          <UserSubscriptionClientsModal isOpen={isSubscriptionClientsModalOpen} onOpenChange={setSubscriptionClientsModalOpen} userId={user.id} username={user.username} />
 
-          <UserHwidsModal
-            isOpen={isHwidsModalOpen}
-            onOpenChange={setHwidsModalOpen}
-            userId={user.id}
-            username={user.username}
-          />
+          <UserHwidsModal isOpen={isHwidsModalOpen} onOpenChange={setHwidsModalOpen} userId={user.id} username={user.username} />
 
-          {/* UserAllIPsModal: only for sudo admins */}
-          {currentAdmin?.is_sudo && <UserAllIPsModal isOpen={isUserAllIPsModalOpen} onOpenChange={setUserAllIPsModalOpen} username={user.username} />}
+          {canReadAllUsers && <UserAllIPsModal isOpen={isUserAllIPsModalOpen} onOpenChange={setUserAllIPsModalOpen} userId={user.id} username={user.username} />}
         </div>
       )}
 
@@ -902,7 +889,7 @@ const ActionButtons: FC<ActionButtonsProps> = ({ user, isModalHost = true, rende
         <div className="contents" onClick={e => e.stopPropagation()}>
           <UserModal
             isDialogOpen={isEditModalOpen}
-            onOpenChange={(open) => {
+            onOpenChange={open => {
               if (open) setEditModalOpen(true)
               else closeEditModal()
             }}

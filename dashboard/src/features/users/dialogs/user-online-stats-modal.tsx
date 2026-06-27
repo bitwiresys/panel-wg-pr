@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from 'react-i18next'
-import { useUserOnlineStats, useUserOnlineIpList } from '@/service/api'
+import { useGetUsersSimple, useUserOnlineStats, useUserOnlineIpList } from '@/service/api'
 import { cn } from '@/lib/utils'
 import useDirDetection from '@/hooks/use-dir-detection'
 import { Users, Search, RefreshCw, Loader2, Activity, Eye, AlertCircle, ArrowLeft } from 'lucide-react'
@@ -23,14 +23,15 @@ interface UserOnlineStatsDialogProps {
 }
 
 interface UserStatsCardProps {
+  userId: number
   username: string
   stats: { [key: string]: number }
   nodeId: number
-  onViewIPs: (username: string) => void
+  onViewIPs: (user: { id: number; username: string }) => void
 }
 
 // Memoized UserStatsCard component to prevent unnecessary re-renders
-const UserStatsCard = React.memo(({ username, stats, onViewIPs }: UserStatsCardProps) => {
+const UserStatsCard = React.memo(({ userId, username, stats, onViewIPs }: UserStatsCardProps) => {
   const { t } = useTranslation()
 
   // Memoize calculations to avoid recalculating on every render
@@ -39,11 +40,11 @@ const UserStatsCard = React.memo(({ username, stats, onViewIPs }: UserStatsCardP
   }, [stats])
 
   const handleViewIPs = useCallback(() => {
-    onViewIPs(username)
-  }, [onViewIPs, username])
+    onViewIPs({ id: userId, username })
+  }, [onViewIPs, userId, username])
 
   return (
-    <Card className="transition-colors hover:bg-accent/50">
+    <Card className="hover:bg-accent/50 transition-colors">
       <CardHeader className="pb-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="flex items-center gap-2 text-sm font-medium">
@@ -80,14 +81,14 @@ UserStatsCard.displayName = 'UserStatsCard'
 // Optimized IP list item component with minimal re-renders
 const IPListItem = React.memo(({ ip, timeStrings }: { ip: string; timeStrings: string[] }) => {
   return (
-    <div className="rounded bg-accent/40 p-2 transition-colors hover:bg-accent/60">
+    <div className="bg-accent/40 hover:bg-accent/60 rounded p-2 transition-colors">
       <div className="flex flex-col gap-1">
-        <span className="break-all font-mono text-sm" dir="ltr">
+        <span className="font-mono text-sm break-all" dir="ltr">
           {ip}
         </span>
         <div className="flex flex-wrap gap-1">
           {timeStrings.map((timeString, index) => (
-            <span key={index} className="rounded bg-muted px-1.5 py-0.5 text-xs" dir="ltr">
+            <span key={index} className="bg-muted rounded px-1.5 py-0.5 text-xs" dir="ltr">
               {timeString}
             </span>
           ))}
@@ -121,7 +122,7 @@ const ErrorState = React.memo(({ message }: { message: string }) => {
   const dir = useDirDetection()
 
   return (
-    <div className="flex h-32 flex-col items-center justify-center gap-2 px-4 text-center text-muted-foreground">
+    <div className="text-muted-foreground flex h-32 flex-col items-center justify-center gap-2 px-4 text-center">
       <AlertCircle className="h-5 w-5" />
       <span className="text-sm" dir={dir}>
         {message}
@@ -137,7 +138,7 @@ const EmptyState = React.memo(({ message }: { message: string }) => {
   const dir = useDirDetection()
 
   return (
-    <div className="flex h-32 flex-col items-center justify-center gap-2 px-4 text-center text-muted-foreground">
+    <div className="text-muted-foreground flex h-32 flex-col items-center justify-center gap-2 px-4 text-center">
       <Users className="h-5 w-5" />
       <span className="text-sm" dir={dir}>
         {message}
@@ -153,7 +154,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
   const dir = useDirDetection()
   const [specificUsername, setSpecificUsername] = useState('')
   const [refreshing, setRefreshing] = useState(false)
-  const [viewingIPs, setViewingIPs] = useState<string | null>(null)
+  const [viewingIPs, setViewingIPs] = useState<{ id: number; username: string } | null>(null)
   const { search: searchTerm, debouncedSearch: debouncedSearchTerm, setSearch: setSearchTerm } = useDebouncedSearch('', 500)
 
   // Update specificUsername when debounced search changes
@@ -177,7 +178,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
   const userStatsQueryOptions = useMemo(
     () => ({
       query: {
-        enabled: !!(isOpen && nodeId && specificUsername),
+        enabled: false,
         refetchInterval: (query: any) => {
           if (!isOpen || query.state.error) {
             return false
@@ -192,7 +193,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
   const userIPsQueryOptions = useMemo(
     () => ({
       query: {
-        enabled: !!(isOpen && nodeId && viewingIPs),
+        enabled: !!(isOpen && nodeId && viewingIPs?.id),
         refetchInterval: (query: any) => {
           if (!isOpen || query.state.error) {
             return false
@@ -204,11 +205,34 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
     [isOpen, nodeId, viewingIPs],
   )
 
+  const { data: usersResponse, isLoading: isLoadingUserLookup } = useGetUsersSimple(specificUsername ? { usernames: [specificUsername], limit: 1 } : undefined, {
+    query: {
+      enabled: !!(isOpen && specificUsername),
+    },
+  })
+
+  const searchedUser = useMemo(() => {
+    return usersResponse?.users?.find(user => user.username === specificUsername) || null
+  }, [usersResponse, specificUsername])
+
+  const searchedUserId = searchedUser?.id || 0
+
   // Query for specific user stats (when searching for a specific user)
-  const { data: userStats, isLoading: isLoadingUserStats, error: userStatsError, refetch: refetchUserStats } = useUserOnlineStats(nodeId || 0, specificUsername, userStatsQueryOptions)
+  const effectiveUserStatsQueryOptions = useMemo(
+    () => ({
+      ...userStatsQueryOptions,
+      query: {
+        ...userStatsQueryOptions.query,
+        enabled: !!(isOpen && nodeId && searchedUserId),
+      },
+    }),
+    [isOpen, nodeId, searchedUserId, userStatsQueryOptions],
+  )
+
+  const { data: userStats, isLoading: isLoadingUserStats, error: userStatsError, refetch: refetchUserStats } = useUserOnlineStats(nodeId || 0, searchedUserId, effectiveUserStatsQueryOptions)
 
   // Query for user IP list (when viewing IPs)
-  const { data: userIPs, error: userIPsError, refetch: refetchIPs } = useUserOnlineIpList(nodeId || 0, viewingIPs || '', userIPsQueryOptions)
+  const { data: userIPs, error: userIPsError, refetch: refetchIPs } = useUserOnlineIpList(nodeId || 0, viewingIPs?.id || 0, userIPsQueryOptions)
 
   // Memoized error handlers
   const handleUserStatsError = useCallback(
@@ -240,7 +264,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
         toast.error(
           t('nodeModal.onlineStats.userNotFound', {
             defaultValue: 'User not found or not online',
-            username: viewingIPs,
+            username: viewingIPs?.username,
           }),
         )
       } else {
@@ -279,9 +303,12 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
   }, [searchTerm, t])
 
   // Handle search input (debounced automatically by hook)
-  const handleSearchInput = useCallback((value: string) => {
-    setSearchTerm(value)
-  }, [setSearchTerm])
+  const handleSearchInput = useCallback(
+    (value: string) => {
+      setSearchTerm(value)
+    },
+    [setSearchTerm],
+  )
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true)
@@ -303,8 +330,8 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
     }
   }, [specificUsername, viewingIPs, refetchUserStats, refetchIPs, t])
 
-  const handleViewIPs = useCallback((username: string) => {
-    setViewingIPs(username)
+  const handleViewIPs = useCallback((user: { id: number; username: string }) => {
+    setViewingIPs(user)
   }, [])
 
   const handleBackToStats = useCallback(() => {
@@ -349,6 +376,20 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
           })
         }
       })
+    } else if ('ips' in userIPs && typeof userIPs.ips === 'object' && userIPs.ips !== null) {
+      Object.entries(userIPs.ips).forEach(([ip, timestamp]) => {
+        if (!transformedData[ip]) transformedData[ip] = []
+        let tsNum = Number(timestamp)
+        if (tsNum < 1e12) tsNum = tsNum * 1000
+        const date = new Date(tsNum)
+        const timeString = date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        })
+        transformedData[ip].push(timeString)
+      })
     } else if (typeof userIPs === 'object' && Object.keys(userIPs).length === 1 && !isNaN(Number(Object.keys(userIPs)[0]))) {
       // If userIPs is an object with a single numeric key, use its value
       const onlyKey = Object.keys(userIPs)[0]
@@ -389,7 +430,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
             <ScrollArea className="h-[300px] sm:h-[400px]">
               <div className="p-4">
                 <h4 className="mb-2 text-sm font-medium">Raw Data (Debug):</h4>
-                <pre className="overflow-auto rounded bg-muted p-2 text-xs">{JSON.stringify(userIPs, null, 2)}</pre>
+                <pre className="bg-muted overflow-auto rounded p-2 text-xs">{JSON.stringify(userIPs, null, 2)}</pre>
               </div>
             </ScrollArea>
           </div>
@@ -418,7 +459,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
             ))}
           </div>
           {hasMore && (
-            <div className="py-2 text-center text-xs text-muted-foreground">
+            <div className="text-muted-foreground py-2 text-center text-xs">
               {t('nodeModal.onlineStats.showingFirst', {
                 defaultValue: 'Showing first {{count}} IP addresses',
                 count: maxItems,
@@ -431,12 +472,16 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
   }, [transformedIPData, userIPs, handleBackToStats, dir, t])
 
   const renderUserStats = useCallback(() => {
-    if (isLoadingUserStats) {
+    if (isLoadingUserLookup || isLoadingUserStats) {
       return <LoadingState />
     }
 
     if (userStatsError) {
       return <ErrorState message={t('nodeModal.onlineStats.errorLoading', { defaultValue: 'Error loading user stats' })} />
+    }
+
+    if (specificUsername && !isLoadingUserLookup && !searchedUser) {
+      return <EmptyState message={t('nodeModal.onlineStats.userNotFound', { defaultValue: 'User not found or not online' })} />
     }
 
     if (!filteredStats || Object.keys(filteredStats).length === 0) {
@@ -448,17 +493,17 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
 
     return (
       <div className="space-y-3">
-        <UserStatsCard username={specificUsername} stats={filteredStats} nodeId={nodeId || 0} onViewIPs={handleViewIPs} />
+        <UserStatsCard userId={searchedUserId} username={specificUsername} stats={filteredStats} nodeId={nodeId || 0} onViewIPs={handleViewIPs} />
       </div>
     )
-  }, [isLoadingUserStats, userStatsError, filteredStats, specificUsername, nodeId, handleViewIPs, t])
+  }, [isLoadingUserLookup, isLoadingUserStats, userStatsError, filteredStats, specificUsername, searchedUser, searchedUserId, nodeId, handleViewIPs, t])
 
   // Memoized dialog title
   const dialogTitle = useMemo(() => {
     return viewingIPs
       ? t('nodeModal.onlineStats.ipListTitle', {
           defaultValue: 'IP Addresses for {{username}}',
-          username: viewingIPs,
+          username: viewingIPs.username,
         })
       : t('nodeModal.onlineStats.title', { defaultValue: 'Online User Statistics' })
   }, [viewingIPs, t])
@@ -479,7 +524,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
             <span>{dialogTitle}</span>
           </DialogTitle>
           {nodeName && (
-            <p className={cn('text-sm text-muted-foreground', dir === 'rtl' && 'sm:text-right')}>
+            <p className={cn('text-muted-foreground text-sm', dir === 'rtl' && 'sm:text-right')}>
               {t('nodeModal.onlineStats.nodeInfo', {
                 defaultValue: 'Node: {{nodeName}}',
                 nodeName,
@@ -512,7 +557,7 @@ export default function UserOnlineStatsModal({ isOpen, onOpenChange, nodeId, nod
 
         {/* Auto-refresh indicator */}
         {(specificUsername || viewingIPs) && (
-          <div className="border-t py-2 text-center text-xs text-muted-foreground">
+          <div className="text-muted-foreground border-t py-2 text-center text-xs">
             <Activity className="mr-1 inline h-3 w-3" />
             <span dir={dir}>{t('nodeModal.onlineStats.autoRefresh', { defaultValue: 'Auto-refreshing every 10 seconds' })}</span>
           </div>

@@ -3,6 +3,8 @@
   "dashboard": "Dashboard",
   "master": "Overall",
   "dashboardDescription": "PasarGuard Management Dashboard",
+  "default": "Default",
+  "unlimited": "Unlimited",
   "active": "active",
   "online": "Online",
   "platform": "Platform",
@@ -22,7 +24,7 @@
   "monitorUsers": "Monitor Users",
   "alltime": "All time",
   "today": "Today",
-  "coreUsername": "Core Username",
+  "copyUserId": "Copy ID",
   "nodes": {
     "title": "Nodes",
     "description": "Manage your nodes",
@@ -155,8 +157,10 @@
       "cancelSuccess": "Changes cancelled and original settings restored",
       "filterTitle": "Filter Notifications",
       "filterDescription": "Select events that should trigger notifications for important system activities",
+      "toggleAll": "Toggle all notifications",
       "types": {
         "admin": "Admins",
+        "adminRole": "Admin roles",
         "core": "Cores",
         "group": "Groups",
         "host": "Hosts",
@@ -173,9 +177,11 @@
         "delete": "Delete",
         "resetUsage": "Reset Usage",
         "login": "Login",
+        "usageLimitWarning": "Usage Limit Warning",
         "modifyHosts": "Modify Hosts",
         "connect": "Connect",
         "error": "Error",
+        "limited": "Limited",
         "statusChange": "Status Change",
         "resetDataUsage": "Reset Data Usage",
         "dataResetByNext": "Data Reset By Next",
@@ -204,6 +210,12 @@
         "title": "Channel Overrides",
         "description": "Override the default destinations for specific notification events. Leave fields empty to inherit the global configuration.",
         "hint": "Leave these fields empty to fall back to the main notification settings for this event."
+      },
+      "usageLimitWarnings": {
+        "thresholds": "Warning Thresholds",
+        "description": "Send admin data-limit warnings when usage reaches these percentages.",
+        "addThreshold": "Add Threshold",
+        "empty": "No thresholds configured"
       }
     },
     "subscriptions": {
@@ -326,6 +338,8 @@
         "descriptionDescription": "Multi-language descriptions for the application",
         "recommended": "Recommended",
         "recommendedDescription": "Mark this application as recommended for users",
+        "showWhenHwidEnabled": "Target HWID-enabled users",
+        "showWhenHwidEnabledDescription": "If enabled, this app only shows to users with HWID active. If disabled, it only shows to users without HWID.",
         "downloadLinks": "Links",
         "addDownloadLink": "Add Link",
         "noDownloadLinks": "No links added",
@@ -366,6 +380,10 @@
       "forced": {
         "title": "Require HWID header",
         "description": "Reject subscription requests that do not send X-HWID."
+      },
+      "manualSubscription": {
+        "title": "Require HWID for manual subscriptions",
+        "description": "Apply the forced HWID header policy to manual subscription format requests."
       },
       "limits": {
         "title": "Device limits",
@@ -431,26 +449,6 @@
         "miniAppUrlDescription": "The URL for your Telegram Mini App. Leave empty if not used.",
         "forAdminsOnly": "For Admins Only",
         "forAdminsOnlyDescription": "Restrict bot access to administrators only"
-      }
-    },
-    "discord": {
-      "title": "Discord",
-      "description": "Configure Discord bot integration and related settings for your system",
-      "loadError": "Failed to load Discord settings. Please try again.",
-      "saveSuccess": "Discord settings saved successfully",
-      "saveFailed": "Failed to save Discord settings",
-      "cancelSuccess": "Changes cancelled and original Discord settings restored",
-      "general": {
-        "title": "General Settings",
-        "description": "Basic Discord bot configuration and connection settings",
-        "enable": "Enable Discord Bot",
-        "enableDescription": "Enable or disable Discord bot functionality for your system",
-        "token": "Bot Token",
-        "tokenPlaceholder": "Enter your Discord bot token",
-        "tokenDescription": "Bot token obtained from Discord Developer Portal",
-        "proxyUrl": "Proxy URL",
-        "proxyUrlPlaceholder": "socks5://proxy.example.com:1080",
-        "proxyUrlDescription": "Proxy URL for Discord API connections (optional)"
       }
     },
     "webhook": {
@@ -639,9 +637,11 @@
     "description": "Manage system administrators",
     "createAdmin": "Create Admin",
     "editAdmin": "Modify Admin",
+    "profileSection": "Profile & contact",
     "deleteAdmin": "Remove Admin",
     "username": "Username",
     "password": "Password",
+    "dataLimit": "Admin data limit",
     "isSudo": "Super Admin",
     "createdAt": "Created At",
     "actions": "Actions",
@@ -649,6 +649,8 @@
     "createFailed": "Failed to create admin «{{name}}»",
     "editSuccess": "Admin «{{name}}» has been modified successfully",
     "editFailed": "Failed to modify admin «{{name}}»",
+    "passwordChangedTitle": "Password changed",
+    "passwordChangedLogout": "Please sign in again with your new password.",
     "deleteSuccess": "Admin {{name}} removed successfully",
     "deleteFailed": "Failed to remove admin {{name}}",
     "bulkDeleteSuccess": "{{count}} admins deleted successfully.",
@@ -686,11 +688,14 @@
     "create": "Create Admin",
     "status": "Status",
     "role": "Role",
+    "permissionOverrides": "Permission overrides",
+    "permissionOverridesHint": "Leave empty to inherit limits from the selected role. Set to 0 to disable.",
     "total.users": "Total Users",
     "used.traffic": "Used Traffic",
     "total": "Total Admins",
     "active": "Active Admins",
     "disable": "Disabled Admins",
+    "limited": "Limited Admins",
     "telegramId": "Telegram ID",
     "discord": "Discord Webhook",
     "supportUrl": "Support URL",
@@ -716,7 +721,6 @@
     "activateAllDisabledUsersSuccess": "All disabled users under admin «{{name}}» have been activated successfully",
     "activateAllDisabledUsersFailed": "Failed to activate all disabled users under admin «{{name}}»",
     "reset": "Reset usage",
-    "discordId": "Discord ID",
     "used": {
       "traffic": "Usage"
     },
@@ -724,6 +728,202 @@
       "traffic": "Monitor admin traffic usage over time",
       "no_traffic": "No traffic data available"
     }
+  },
+  "adminRoles": {
+    "title": "Admin Roles",
+    "description": "Manage dashboard roles and RBAC permissions",
+    "createRole": "Create role",
+    "editRole": "Edit role",
+    "viewRole": "View role",
+    "readOnlyHint": "This is the owner role. You can review its configuration but cannot modify it.",
+    "modalDescription": "Configure permissions, limits, features and access for this role.",
+    "currentRoleUnavailable": "Current role unavailable",
+    "loadFallback": "Using built-in roles",
+    "id": "ID",
+    "ownerRole": "owner",
+    "builtInRole": "built-in",
+    "protectedRole": "Protected role",
+    "protectedRoleHint": "Built-in and owner roles cannot be modified.",
+    "permissions": "Permissions",
+    "limits": "Limits",
+    "limitsAndFeatures": "Limits & Features",
+    "limitsHint": "Leave empty to inherit defaults. Set to 0 to disable.",
+    "roleFormHint": "Scoped user actions use none, own, or all. Other actions are boolean toggles.",
+    "scopedActionInfo": "Choose ownership scope: none denies access, own limits to the admin's own users, all grants full access.",
+    "allowAll": "Allow all",
+    "features": "Features",
+    "access": "Access",
+    "permissionCount": "{{count}} permissions",
+    "limitFeatureCount": "{{limits}} limits, {{features}} feature flags",
+    "unlimited": "Unlimited",
+    "inherit": "Inherit",
+    "hwidPolicy": "HWID policy",
+    "hwidPolicyHint": "Choose how HWID policy is applied. Use \"Override\" to customize limits for this role.",
+    "hwidMode": "HWID Mode",
+    "hwidModeDisabled": "Disabled",
+    "hwidModeUseGlobal": "Use Global Settings",
+    "hwidModeOverride": "Override Settings",
+    "hwidEnabledDescription": "Apply HWID registration and limits to users created or modified by this role.",
+    "empty": "No roles",
+    "emptyDescription": "Create a role to assign granular permissions, limits, features, and access restrictions to admins.",
+    "noSearchResults": "No roles match your search.",
+    "createSuccess": "Role «{{name}}» has been created successfully",
+    "editSuccess": "Role «{{name}}» has been updated successfully",
+    "deleteSuccess": "Role «{{name}}» has been deleted successfully",
+    "deleteFailed": "Failed to delete role «{{name}}»",
+    "deleteConfirmation": "Delete role",
+    "deleteConfirm": "Are you sure you want to delete role <b>{{name}}</b>?",
+    "bulkDeleteTitle": "Delete selected roles",
+    "bulkDeletePrompt": "Are you sure you want to delete {{count}} selected roles? This action cannot be undone.",
+    "bulkDeleteSuccess": "{{count}} roles deleted successfully.",
+    "bulkDeletePartial": "{{count}} roles could not be deleted.",
+    "bulkDeleteFailed": "Failed to delete selected roles.",
+    "requireTemplateTitle": "Require template",
+    "requireTemplateDescription": "Force admins with this role to create or modify users only from a template.",
+    "allowedTemplates": "Allowed templates",
+    "allowedTemplatesDescription": "Restrict templates this role can use. Leave empty to allow all.",
+    "allowedGroups": "Allowed groups",
+    "allowedGroupsDescription": "Restrict user groups this role can manage. Leave empty to allow all.",
+    "noTemplates": "No templates available",
+    "noGroups": "No groups available",
+    "names": {
+      "administrator": "Administrator",
+      "operator": "Operator"
+    },
+    "groups": {
+      "users": "Users",
+      "admins": "Admins",
+      "roles": "Roles",
+      "nodes": "Nodes",
+      "coreHosts": "Core and hosts",
+      "groupsTemplates": "Groups and templates",
+      "settings": "Settings"
+    },
+    "actions": {
+      "common": {
+        "read": "View",
+        "read_simple": "View simple list",
+        "create": "Create",
+        "update": "Update",
+        "delete": "Delete",
+        "reset_usage": "Reset usage",
+        "revoke_sub": "Revoke subscription",
+        "set_owner": "Set owner",
+        "activate_next_plan": "Activate next plan",
+        "reconnect": "Reconnect",
+        "update_core": "Update core",
+        "stats": "View statistics",
+        "logs": "View logs",
+        "read_general": "View general"
+      },
+      "users": {
+        "reset_usage": "Reset user usage",
+        "revoke_sub": "Revoke subscription",
+        "set_owner": "Set user owner",
+        "activate_next_plan": "Activate next plan"
+      },
+      "admins": {
+        "reset_usage": "Reset admin usage"
+      },
+      "settings": {
+        "read": "View settings",
+        "read_general": "View general settings",
+        "update": "Update settings"
+      },
+      "system": {
+        "read": "View system",
+        "update": "Update system"
+      },
+      "hwids": {
+        "read": "View HWIDs",
+        "update": "Update HWIDs"
+      },
+      "nodes": {
+        "reconnect": "Reconnect nodes",
+        "update_core": "Update node core",
+        "stats": "View node statistics",
+        "logs": "View node logs"
+      }
+    },
+    "resources": {
+      "users": "Users",
+      "admins": "Admins",
+      "admin_roles": "Roles",
+      "nodes": "Nodes",
+      "cores": "Cores",
+      "hosts": "Hosts",
+      "groups": "Groups",
+      "templates": "User templates",
+      "client_templates": "Client templates",
+      "settings": "Settings",
+      "system": "System",
+      "hwids": "HWIDs"
+    },
+    "scopedBadge": "Scoped",
+    "scopes": {
+      "none": "None",
+      "own": "Own",
+      "all": "All"
+    },
+    "limitFields": {
+      "max_users": "Max users",
+      "data_limit_min": "Min data limit",
+      "data_limit_max": "Max data limit",
+      "expire_days_min": "Min expire days",
+      "expire_days_max": "Max expire days",
+      "min_hwid_per_user": "Min HWIDs per user",
+      "max_hwid_per_user": "Max HWIDs per user",
+      "on_hold_timeout_days_min": "Min On-Hold timeout (days)",
+      "on_hold_timeout_days_max": "Max On-Hold timeout (days)"
+    },
+    "limitedBehavior": {
+      "disabledWhenLimited": {
+        "title": "Block limited admins",
+        "description": "Deny all dashboard and API access after an admin reaches their data limit."
+      },
+      "disconnectUsersWhenLimited": {
+        "title": "Disconnect users when limited",
+        "description": "Remove this admin's users from nodes while the admin is usage-limited."
+      },
+      "disconnectUsersWhenDisabled": {
+        "title": "Disconnect users when disabled",
+        "description": "Remove this admin's users from nodes while the admin is disabled."
+      }
+    },
+    "featureFields": {
+      "can_use_reset_strategy": {
+        "title": "Use reset strategy",
+        "description": "Allow this role to set the data-limit reset strategy on users."
+      },
+      "can_use_next_plan": {
+        "title": "Use next plan",
+        "description": "Allow this role to configure auto-applied next plans."
+      }
+    }
+  },
+  "setup": {
+    "createOwner": "Create owner",
+    "upgradeOwner": "Make admin owner",
+    "resetOwner": "Reset owner password",
+    "deleteOwner": "Delete owner",
+    "createOwnerShort": "Create",
+    "upgradeOwnerShort": "Make owner",
+    "resetOwnerShort": "Reset",
+    "deleteOwnerShort": "Delete",
+    "ownerAccess": "Owner access",
+    "ownerAccessDescription": "Use a temporary setup key to create, promote, reset, or remove the owner account.",
+    "tempKey": "Temp key",
+    "deleteConfirm": "Type DELETE to confirm",
+    "keyRequired": "Temp key is required",
+    "usernameRequired": "Username is required",
+    "passwordRequired": "Password is required",
+    "passwordMismatch": "Passwords do not match",
+    "deleteConfirmRequired": "Type DELETE to confirm",
+    "ownerCreated": "Owner created successfully",
+    "ownerUpgraded": "Admin promoted to owner successfully",
+    "ownerReset": "Owner password reset successfully",
+    "ownerDeleted": "Owner deleted successfully",
+    "deleteWarning": "This action cannot be undone. The owner account will be permanently removed."
   },
   "shortcuts": {
     "title": "Keyboard Shortcuts",
@@ -740,6 +940,8 @@
   "removeAllUsers.prompt": "Are you sure you want to remove all users under admin <b>{{name}}</b>? This action cannot be undone.",
   "admin.disable": "Disable Admin",
   "admin.enable": "Enable Admin",
+  "admin.disablePrompt": "Are you sure you want to disable admin <b>{{name}}</b>?",
+  "admin.enablePrompt": "Are you sure you want to enable admin <b>{{name}}</b>?",
   "deleteAdmin.prompt": "Are you sure you want to remove the <b>{{name}}</b> admin?",
   "activeUsers.prompt": "Do you want to activate all users under {{name}}?",
   "disableUsers.prompt": "Do you want to disable all users under {{name}}?",
@@ -772,7 +974,7 @@
     "suffix": "Username Suffix",
     "dataLimit": "Data Limit",
     "hwidLimit": "HWID Limit",
-    "hwidLimitPlaceholder": "Default, 0 = unlimited",
+    "hwidLimitPlaceholder": "Empty = default, 0 = unlimited",
     "expire": "Expire duration",
     "onHoldTimeout": "OnHold Timeout",
     "method": "Method",
@@ -1303,6 +1505,7 @@
   "login.fieldRequired": "This field is required",
   "login.loginYourAccount": "Login to your account",
   "login.welcomeBack": "Welcome back, please enter your details",
+  "login.backToLogin": "Back to login",
   "memoryUsage": "memory usage",
   "next": "Next",
   "monitorServers": "Monitor your servers and users",
@@ -1425,7 +1628,7 @@
     "custom": "Custom",
     "dataLimit": "Data Limit",
     "hwidLimit": "HWID Limit",
-    "hwidLimitPlaceholder": "Fallback, 0 = unlimited",
+    "hwidLimitPlaceholder": "Empty = default, 0 = unlimited",
     "days": "Days",
     "editUser": "Modify user",
     "editUserTitle": "Modify user",
@@ -2221,7 +2424,7 @@
       "transportSection": "Transport",
       "securitySection": "Security",
       "vlessFlowDefault": "Default (none)",
-      "vlessFlowVisionRequiresTls": "Vision flows require inbound security TLS or REALITY (not “none”).",
+      "vlessFlowVisionRequiresTls": "XTLS Vision requires TCP with TLS/REALITY, xHTTP with TLS, or VLESS Encryption.",
       "transportAdvanced": {
         "title": "Transport details"
       },
@@ -2760,6 +2963,7 @@
   "createdAt": "Created at",
   "toggle": "Toggle status",
   "close": "Close",
+  "view": "View",
   "copy": "Copy",
   "copyAll": "Copy All",
   "copied": "Copied!",
@@ -3112,6 +3316,8 @@
     "byUsernameDescription": "Search usernames and notes.",
     "byProtocol": "Protocol Data",
     "byProtocolDescription": "Search protocol details and configuration data.",
+    "byUserId": "User ID",
+    "byUserIdDescription": "Search exact user IDs, comma-separated.",
     "filtersSection": "Refine results",
     "filtersSectionDescription": "Use one or more filters to narrow the list.",
     "showCreatedBy": "Show created by",

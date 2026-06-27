@@ -8,6 +8,8 @@ import { useTranslation } from 'react-i18next'
 
 interface StickySaveBarProps {
   dirty: boolean
+  canSave?: boolean
+  saveLabel?: string
   onSave: () => void
   onDiscard: () => void
   saving: boolean
@@ -17,25 +19,14 @@ interface StickySaveBarProps {
   className?: string
 }
 
-export function StickySaveBar({
-  dirty,
-  onSave,
-  onDiscard,
-  saving,
-  showRestart,
-  restartNodes,
-  onRestartChange,
-  className,
-}: StickySaveBarProps) {
+export function StickySaveBar({ dirty, canSave = dirty, saveLabel, onSave, onDiscard, saving, showRestart, restartNodes, onRestartChange, className }: StickySaveBarProps) {
   const { t } = useTranslation()
-  const statusLabel = dirty
-    ? t('coreEditor.unsaved', { defaultValue: 'Unsaved changes' })
-    : t('coreEditor.saved', { defaultValue: 'All changes saved' })
+  const statusLabel = dirty ? t('coreEditor.unsaved', { defaultValue: 'Unsaved changes' }) : t('coreEditor.saved', { defaultValue: 'All changes saved' })
 
   return (
     <div
       className={cn(
-        'sticky bottom-0 z-20 flex flex-col gap-3 border-t bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:flex-row sm:items-center sm:justify-end mb-3',
+        'bg-background/95 supports-[backdrop-filter]:bg-background/80 sticky bottom-0 z-20 mb-3 flex flex-col gap-3 border-t px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-end',
         className,
       )}
     >
@@ -52,19 +43,8 @@ export function StickySaveBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <span className="relative inline-flex rounded-md">
-                {dirty ? (
-                  <span
-                    className="absolute -right-1 -top-1 z-10 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-background"
-                    aria-hidden
-                  />
-                ) : null}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={!dirty || saving}
-                  onClick={onDiscard}
-                >
+                {dirty ? <span className="ring-background absolute -top-1 -right-1 z-10 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2" aria-hidden /> : null}
+                <Button type="button" variant="outline" size="sm" disabled={!dirty || saving} onClick={onDiscard}>
                   {t('coreEditor.discard', { defaultValue: 'Discard' })}
                 </Button>
               </span>
@@ -73,8 +53,8 @@ export function StickySaveBar({
               {statusLabel}
             </TooltipContent>
           </Tooltip>
-          <LoaderButton type="button" size="sm" disabled={!dirty || saving} isLoading={saving} onClick={onSave}>
-            {t('save', { defaultValue: 'Save' })}
+          <LoaderButton type="button" size="sm" disabled={!canSave || saving} isLoading={saving} onClick={onSave}>
+            {saveLabel ?? t('save', { defaultValue: 'Save' })}
           </LoaderButton>
         </div>
       </TooltipProvider>

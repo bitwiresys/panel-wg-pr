@@ -68,23 +68,6 @@ class Telegram(BaseModel):
         return self
 
 
-class Discord(BaseModel):
-    enable: bool = Field(default=False)
-    token: str | None = Field(default=None)
-    proxy_url: str | None = Field(default=None)
-
-    @field_validator("proxy_url")
-    @classmethod
-    def validate_proxy_url(cls, v):
-        return ProxyValidator.validate_proxy_url(v)
-
-    @model_validator(mode="after")
-    def check_enable_requires_token(self):
-        if self.enable and not self.token:
-            raise ValueError("Discord bot cannot be enabled without token.")
-        return self
-
-
 class WebhookInfo(BaseModel):
     url: str
     secret: str
@@ -128,6 +111,7 @@ class NotificationChannels(BaseModel):
     """Per-object notification channels"""
 
     admin: NotificationChannel = Field(default_factory=NotificationChannel)
+    admin_role: NotificationChannel = Field(default_factory=NotificationChannel)
     core: NotificationChannel = Field(default_factory=NotificationChannel)
     group: NotificationChannel = Field(default_factory=NotificationChannel)
     host: NotificationChannel = Field(default_factory=NotificationChannel)
@@ -242,6 +226,7 @@ class Application(BaseModel):
     import_url: str = Field(default="", max_length=256)
     description: dict[Language, str] = Field(default_factory=dict)
     recommended: bool = Field(False)
+    show_when_hwid_enabled: bool = Field(False)
     platform: Platform
     download_links: list[DownloadLink]
 
@@ -274,24 +259,29 @@ class Subscription(BaseModel):
     @field_validator("applications")
     @classmethod
     def validate_recommended_apps(cls, v: list[Application]) -> list[Application]:
-        """Validate that each platform has at most one recommended application"""
+        """Validate that each platform has at most one recommended app per subscription type."""
         platform_recommended = {}
 
         for app in v:
             if app.recommended:
-                if app.platform in platform_recommended:
-                    raise ValueError(f"Multiple recommended applications found for platform '{app.platform}'.")
-                platform_recommended[app.platform] = app.name
+                recommendation_key = (app.platform, app.show_when_hwid_enabled)
+                if recommendation_key in platform_recommended:
+                    subscription_type = "device-bound" if app.show_when_hwid_enabled else "standard"
+                    raise ValueError(
+                        f"Multiple recommended {subscription_type} applications found for platform '{app.platform}'."
+                    )
+                platform_recommended[recommendation_key] = app.name
 
         return v
 
 
 class HWIDSettings(BaseModel):
-    enabled: bool = Field(default=False)
+    enabled: bool = Field(default=True)
     forced: bool = Field(default=False)
-    fallback_limit: int = Field(default=0, ge=0)
-    min_limit: int = Field(default=0, ge=0)
-    max_limit: int = Field(default=0, ge=0)
+    require_hwid_for_manual_sub: bool = Field(default=True)
+    fallback_limit: int | None = Field(default=None, ge=0)
+    min_limit: int | None = Field(default=None, ge=0)
+    max_limit: int | None = Field(default=None, ge=0)
 
 
 class General(BaseModel):
@@ -300,7 +290,6 @@ class General(BaseModel):
 
 class SettingsSchema(BaseModel):
     telegram: Telegram | None = Field(default=None)
-    discord: Discord | None = Field(default=None)
     webhook: Webhook | None = Field(default=None)
     notification_settings: NotificationSettings | None = Field(default=None)
     notification_enable: NotificationEnable | None = Field(default=None)

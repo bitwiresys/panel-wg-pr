@@ -5,11 +5,11 @@ import { deepPruneEmptyJsonObjects } from '@/features/core-editor/kit/xray-parit
 export function normalizeOutboundStreamSettings(value: unknown): unknown {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'object' || Array.isArray(value)) return value
-  
+
   const obj = value as Record<string, unknown>
   const sockopt = obj.sockopt
   const pruned = deepPruneEmptyJsonObjects(obj)
-  
+
   // If sockopt existed in the original, preserve it even if empty
   if (sockopt !== undefined && sockopt !== null && typeof sockopt === 'object' && !Array.isArray(sockopt)) {
     if (pruned && typeof pruned === 'object' && !Array.isArray(pruned)) {
@@ -19,7 +19,7 @@ export function normalizeOutboundStreamSettings(value: unknown): unknown {
       return { sockopt }
     }
   }
-  
+
   return pruned
 }
 
@@ -64,21 +64,34 @@ function compactSettingsUser(user: Record<string, unknown>): Record<string, unkn
   for (const [k, v] of Object.entries(user)) {
     if (v === undefined || v === null) continue
     if (v === '') continue
-    const pruned =
-      typeof v === 'object' && v !== null && !Array.isArray(v) ? deepPruneEmptyJsonObjects(v) : v
+    const pruned = typeof v === 'object' && v !== null && !Array.isArray(v) ? deepPruneEmptyJsonObjects(v) : v
     if (pruned === undefined) continue
     out[k] = pruned
   }
   return out
 }
 
-function flattenVnextLike(
-  settings: Record<string, unknown>,
-  protocol: 'vless' | 'vmess',
-): Record<string, unknown> {
-  const vnext = settings.vnext as
-    | Array<{ address?: string; port?: number; users?: Array<Record<string, unknown>> }>
-    | undefined
+function normalizeVlessReverseSetting(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) return undefined
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (!trimmed) return undefined
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      return normalizeVlessReverseSetting(parsed)
+    } catch {
+      return { tag: trimmed }
+    }
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined
+
+  const pruned = deepPruneEmptyJsonObjects(value) as unknown
+  if (!pruned || typeof pruned !== 'object' || Array.isArray(pruned)) return undefined
+  return Object.keys(pruned as Record<string, unknown>).length > 0 ? (pruned as Record<string, unknown>) : undefined
+}
+
+function flattenVnextLike(settings: Record<string, unknown>, protocol: 'vless' | 'vmess'): Record<string, unknown> {
+  const vnext = settings.vnext as Array<{ address?: string; port?: number; users?: Array<Record<string, unknown>> }> | undefined
   if (!vnext?.[0]) return { ...settings }
   const ep = vnext[0]
   const u = ep.users?.[0] ?? {}
@@ -107,17 +120,7 @@ function flattenServersLike(settings: Record<string, unknown>, protocol: 'trojan
   const s = servers[0]
   const next: Record<string, unknown> = { ...settings }
   delete next.servers
-  for (const k of [
-    'address',
-    'port',
-    'password',
-    'method',
-    'flow',
-    'level',
-    'email',
-    'uot',
-    'uotVersion',
-  ] as const) {
+  for (const k of ['address', 'port', 'password', 'method', 'flow', 'level', 'email', 'uot', 'uotVersion'] as const) {
     if (s[k] !== undefined) next[k] = s[k]
   }
   if (protocol === 'shadowsocks' && s.ivCheck !== undefined) next.ivCheck = s.ivCheck
@@ -209,12 +212,7 @@ export function outboundEditorBodyFromOutbound(ob: Outbound): Record<string, unk
     return { protocol: 'unmanaged', tag: ob.tag, raw: (ob as { raw: unknown }).raw }
   }
   const flat = flattenOutboundSettings(ob) as Record<string, unknown>
-  const settingsBody =
-    ob.protocol === 'hysteria'
-      ? stripHysteriaOutboundRedundantVersion(flat)
-      : ob.protocol === 'dns'
-        ? pruneDnsOutboundSettings(flat)
-        : flat
+  const settingsBody = ob.protocol === 'hysteria' ? stripHysteriaOutboundRedundantVersion(flat) : ob.protocol === 'dns' ? pruneDnsOutboundSettings(flat) : flat
   const body: Record<string, unknown> = {
     protocol: ob.protocol,
     tag: ob.tag,
@@ -232,22 +230,17 @@ export function outboundEditorBodyFromOutbound(ob: Outbound): Record<string, unk
 
 export function normalizeSettingsFromEditor(protocol: string, settings: Record<string, unknown>): Record<string, unknown> {
   if (protocol === 'vless') {
-    if (Array.isArray(settings.vnext) && settings.vnext.length > 0) return { ...settings }
-    const { address, port, id, flow, encryption, level, email, ...rest } = settings
-    if (address != null && port != null && id != null) {
-      const user = compactSettingsUser({
-        id,
-        encryption,
-        flow: typeof flow === 'string' && flow === '' ? undefined : flow,
-        level,
-        email,
-      })
-      return {
-        ...rest,
-        vnext: [{ address, port, users: [user] }],
-      }
+    const next = { ...settings }
+    const reverse = normalizeVlessReverseSetting(next.reverse)
+    if (reverse) return { reverse }
+
+    if (typeof next.flow === 'string' && next.flow === '') delete next.flow
+    if (Array.isArray(next.vnext) && next.vnext.length === 0) delete next.vnext
+    delete next.reverse
+    for (const key of ['address', 'port', 'id', 'encryption', 'level', 'email'] as const) {
+      if (next[key] === undefined || next[key] === null || next[key] === '') delete next[key]
     }
-    return { ...settings }
+    return next
   }
   if (protocol === 'vmess') {
     if (Array.isArray(settings.vnext) && settings.vnext.length > 0) return { ...settings }
@@ -285,9 +278,7 @@ export function normalizeSettingsFromEditor(protocol: string, settings: Record<s
     if (address != null && port != null && password != null) {
       return {
         ...rest,
-        servers: [
-          compactSettingsUser({ address, port, password, method, level, email, uot, uotVersion, ivCheck }),
-        ],
+        servers: [compactSettingsUser({ address, port, password, method, level, email, uot, uotVersion, ivCheck })],
       }
     }
     return { ...settings }
@@ -313,21 +304,12 @@ export function mergeEditorBodyIntoOutbound(ob: Outbound, body: Record<string, u
   if (!settingsIn || typeof settingsIn !== 'object' || Array.isArray(settingsIn)) settingsIn = {}
   const settings = normalizeSettingsFromEditor(protocol, settingsIn as Record<string, unknown>)
 
-  const sendThroughRaw =
-    body.sendThrough !== undefined
-      ? body.sendThrough
-      : 'sendThrough' in ob
-        ? (ob as { sendThrough?: unknown }).sendThrough
-        : undefined
-  const sendThrough =
-    sendThroughRaw !== undefined && sendThroughRaw !== null && String(sendThroughRaw).trim() !== ''
-      ? String(sendThroughRaw)
-      : undefined
+  const sendThroughRaw = body.sendThrough !== undefined ? body.sendThrough : 'sendThrough' in ob ? (ob as { sendThrough?: unknown }).sendThrough : undefined
+  const sendThrough = sendThroughRaw !== undefined && sendThroughRaw !== null && String(sendThroughRaw).trim() !== '' ? String(sendThroughRaw) : undefined
 
   const muxSource = body.mux !== undefined ? body.mux : (ob as { mux?: unknown }).mux
   const mux = normalizeOutboundStreamSettings(muxSource)
-  const proxySource =
-    body.proxySettings !== undefined ? body.proxySettings : (ob as { proxySettings?: unknown }).proxySettings
+  const proxySource = body.proxySettings !== undefined ? body.proxySettings : (ob as { proxySettings?: unknown }).proxySettings
   const proxySettings = normalizeOutboundStreamSettings(proxySource)
 
   const next: Record<string, unknown> = {

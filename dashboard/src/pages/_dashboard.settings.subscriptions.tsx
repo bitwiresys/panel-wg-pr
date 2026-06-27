@@ -7,12 +7,7 @@ import { SubscriptionManualFormatsSection } from '@/features/subscriptions/compo
 import { SubscriptionResponseHeadersSection } from '@/features/subscriptions/components/subscription-response-headers-section'
 import { SubscriptionRulesSection } from '@/features/subscriptions/components/subscription-rules-section'
 import { SubscriptionSettingsSkeleton } from '@/features/subscriptions/components/subscription-settings-skeleton'
-import {
-  subscriptionSchema,
-  type SubscriptionApplicationFormData,
-  type SubscriptionFormData,
-  defaultSubscriptionRules,
-} from '@/features/subscriptions/components/subscription-settings-schema'
+import { subscriptionSchema, type SubscriptionApplicationFormData, type SubscriptionFormData, defaultSubscriptionRules } from '@/features/subscriptions/components/subscription-settings-schema'
 import { Form } from '@/components/ui/form'
 import { Separator } from '@/components/ui/separator'
 import { type SubRule as ApiSubRule } from '@/service/api'
@@ -125,16 +120,12 @@ export default function SubscriptionSettings() {
         allow_browser_config: subscriptionData.allow_browser_config ?? true,
         disable_sub_template: subscriptionData.disable_sub_template ?? false,
         randomize_order: subscriptionData.randomize_order ?? false,
-        response_headers: Object.fromEntries(
-          Object.entries(subscriptionData.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]),
-        ),
+        response_headers: Object.fromEntries(Object.entries(subscriptionData.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)])),
         rules:
           subscriptionData.rules?.map((rule: ApiSubRule) => ({
             pattern: rule.pattern,
             target: rule.target,
-            response_headers: Object.fromEntries(
-              Object.entries(rule.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]),
-            ),
+            response_headers: Object.fromEntries(Object.entries(rule.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)])),
           })) || [],
         applications: subscriptionData.applications || [],
         manual_sub_request: {
@@ -176,6 +167,7 @@ export default function SubscriptionSettings() {
           import_url: app.import_url?.trim() || undefined,
           description: app.description || {},
           recommended: app.recommended || false,
+          show_when_hwid_enabled: app.show_when_hwid_enabled || false,
           platform: app.platform,
           download_links: (app.download_links || [])
             .map(link => ({
@@ -190,10 +182,11 @@ export default function SubscriptionSettings() {
       const platformHasRecommended: Record<string, boolean> = {}
       const processedApplications = rawApps.map(app => {
         if (app.recommended) {
-          if (platformHasRecommended[app.platform]) {
+          const recommendationKey = `${app.platform}:${app.show_when_hwid_enabled ? 'hwid' : 'standard'}`
+          if (platformHasRecommended[recommendationKey]) {
             return { ...app, recommended: false }
           }
-          platformHasRecommended[app.platform] = true
+          platformHasRecommended[recommendationKey] = true
         }
         return app
       })
@@ -282,16 +275,12 @@ export default function SubscriptionSettings() {
         allow_browser_config: subscriptionData.allow_browser_config ?? true,
         disable_sub_template: subscriptionData.disable_sub_template ?? false,
         randomize_order: subscriptionData.randomize_order ?? false,
-        response_headers: Object.fromEntries(
-          Object.entries(subscriptionData.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]),
-        ),
+        response_headers: Object.fromEntries(Object.entries(subscriptionData.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)])),
         rules:
           subscriptionData.rules?.map((rule: ApiSubRule) => ({
             pattern: rule.pattern,
             target: rule.target,
-            response_headers: Object.fromEntries(
-              Object.entries(rule.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]),
-            ),
+            response_headers: Object.fromEntries(Object.entries(rule.response_headers || {}).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)])),
           })) || [],
         applications: subscriptionData.applications || [],
         manual_sub_request: {

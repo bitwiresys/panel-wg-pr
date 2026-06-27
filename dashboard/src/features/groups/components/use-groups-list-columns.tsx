@@ -8,9 +8,11 @@ import GroupActionsMenu from '@/features/groups/components/group-actions-menu'
 interface UseGroupsListColumnsProps {
   onEdit: (group: GroupResponse) => void
   onToggleStatus: (group: GroupResponse) => Promise<void>
+  canUpdate?: boolean
+  canDelete?: boolean
 }
 
-export const useGroupsListColumns = ({ onEdit, onToggleStatus }: UseGroupsListColumnsProps) => {
+export const useGroupsListColumns = ({ onEdit, onToggleStatus, canUpdate = true, canDelete = true }: UseGroupsListColumnsProps) => {
   const { t } = useTranslation()
 
   return useMemo<ListColumn<GroupResponse>[]>(
@@ -30,25 +32,29 @@ export const useGroupsListColumns = ({ onEdit, onToggleStatus }: UseGroupsListCo
         id: 'inbounds',
         header: t('inbounds', { defaultValue: t('inbound') }),
         width: '1fr',
-        cell: group => <span className="truncate text-xs text-muted-foreground">{group.inbound_tags?.length || 0}</span>,
+        cell: group => <span className="text-muted-foreground truncate text-xs">{group.inbound_tags?.length || 0}</span>,
         hideOnMobile: true,
       },
       {
         id: 'users',
         header: t('admins.total.users'),
         width: '1fr',
-        cell: group => <span className="truncate text-xs text-muted-foreground">{group.total_users || 0}</span>,
+        cell: group => <span className="text-muted-foreground truncate text-xs">{group.total_users || 0}</span>,
         hideOnMobile: true,
       },
-      {
-        id: 'actions',
-        header: '',
-        width: '64px',
-        align: 'end',
-        hideOnMobile: true,
-        cell: group => <GroupActionsMenu group={group} onEdit={onEdit} onToggleStatus={onToggleStatus} />,
-      },
+      ...(canUpdate || canDelete
+        ? [
+            {
+              id: 'actions',
+              header: '',
+              width: '64px',
+              align: 'end' as const,
+              hideOnMobile: true,
+              cell: (group: GroupResponse) => <GroupActionsMenu group={group} onEdit={onEdit} onToggleStatus={onToggleStatus} canUpdate={canUpdate} canDelete={canDelete} />,
+            },
+          ]
+        : []),
     ],
-    [t, onEdit, onToggleStatus],
+    [t, onEdit, onToggleStatus, canUpdate, canDelete],
   )
 }

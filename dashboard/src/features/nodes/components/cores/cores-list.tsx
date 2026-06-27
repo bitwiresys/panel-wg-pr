@@ -31,9 +31,12 @@ interface CoresProps {
   cores?: CoreResponse[]
   onDuplicateCore?: (coreId: number | string) => void
   onDeleteCore?: (coreName: string, coreId: number) => void
+  canCreate?: boolean
+  canUpdate?: boolean
+  canDelete?: boolean
 }
 
-export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresProps) {
+export default function Cores({ cores, onDuplicateCore, onDeleteCore, canCreate = true, canUpdate = true, canDelete = true }: CoresProps) {
   const navigate = useNavigate()
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = usePersistedViewMode('view-mode:cores')
@@ -54,13 +57,17 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
   const { data: coresData, isLoading, isFetching, refetch } = useGetAllCores({})
 
   const openCoreConfigModalForCreate = useCallback(() => {
+    if (!canCreate) return
+
     setIsEditingCoreInModal(false)
     setEditingCoreIdInModal(undefined)
     setIsCoreConfigModalOpen(true)
-  }, [])
+  }, [canCreate])
 
   const openCoreConfigModalForEdit = useCallback(
     (core: CoreResponse) => {
+      if (!canUpdate) return
+
       coreConfigForm.reset({
         name: core.name,
         type: (core.type ?? 'xray') as CoreBackendType,
@@ -73,7 +80,7 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
       setIsEditingCoreInModal(true)
       setIsCoreConfigModalOpen(true)
     },
-    [coreConfigForm],
+    [canUpdate, coreConfigForm],
   )
 
   const handleCoreConfigModalOpenChange = useCallback((open: boolean) => {
@@ -86,6 +93,7 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
 
   useEffect(() => {
     const handleOpenDialog = () => {
+      if (!canCreate) return
       if (getCoresListUseConfigModal()) {
         openCoreConfigModalForCreate()
         return
@@ -94,9 +102,11 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
     }
     window.addEventListener('openCoreDialog', handleOpenDialog)
     return () => window.removeEventListener('openCoreDialog', handleOpenDialog)
-  }, [navigate, openCoreConfigModalForCreate])
+  }, [canCreate, navigate, openCoreConfigModalForCreate])
 
   const handleToggleStatus = async (core: CoreResponse) => {
+    if (!canUpdate) return
+
     try {
       await modifyCoreMutation.mutateAsync({
         coreId: core.id,
@@ -148,6 +158,8 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
   }
 
   const handleRowEdit = (core: CoreResponse) => {
+    if (!canUpdate) return
+
     if (getCoresListUseConfigModal()) {
       openCoreConfigModalForEdit(core)
       return
@@ -156,7 +168,7 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
   }
 
   const handleBulkDelete = async () => {
-    if (!selectedCoreIds.length) return
+    if (!canDelete || !selectedCoreIds.length) return
 
     try {
       const response = await bulkDeleteCoresMutation.mutateAsync({
@@ -188,18 +200,25 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
 
   const listColumns = useCoresListColumns({
     onEdit: handleRowEdit,
-    onDuplicate: onDuplicateCore,
-    onDelete: onDeleteCore,
+    onDuplicate: canCreate ? onDuplicateCore : undefined,
+    onDelete: canDelete ? onDeleteCore : undefined,
+    canUpdate,
+    canCreate,
+    canDelete,
   })
 
   return (
     <div className={cn('flex w-full flex-col gap-4 pt-4', dir === 'rtl' && 'rtl')}>
       <div className="flex items-center gap-2 md:gap-3">
         <div className="relative min-w-0 flex-1 md:w-[calc(100%/3-10px)] md:flex-none" dir={dir}>
-          <Search className={cn('absolute', dir === 'rtl' ? 'right-2' : 'left-2', 'top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground')} />
-          <Input placeholder={t('search')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className={cn('pl-8 pr-10', dir === 'rtl' && 'pl-10 pr-8')} />
+          <Search className={cn('absolute', dir === 'rtl' ? 'right-2' : 'left-2', 'text-muted-foreground top-1/2 h-4 w-4 -translate-y-1/2')} />
+          <Input placeholder={t('search')} value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className={cn('pr-10 pl-8', dir === 'rtl' && 'pr-8 pl-10')} />
           {searchQuery && (
-            <button type="button" onClick={() => setSearchQuery('')} className={cn('absolute', dir === 'rtl' ? 'left-2' : 'right-2', 'top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground')}>
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className={cn('absolute', dir === 'rtl' ? 'left-2' : 'right-2', 'text-muted-foreground hover:text-foreground top-1/2 -translate-y-1/2')}
+            >
               <X className="h-4 w-4" />
             </button>
           )}
@@ -219,7 +238,7 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
           <ViewToggle value={viewMode} onChange={setViewMode} />
         </div>
       </div>
-      <BulkActionsBar selectedCount={selectedCoreIds.length} onClear={clearSelection} onDelete={selectedCoreIds.length > 0 ? () => setBulkAction('delete') : undefined} />
+      {canDelete && <BulkActionsBar selectedCount={selectedCoreIds.length} onClear={clearSelection} onDelete={selectedCoreIds.length > 0 ? () => setBulkAction('delete') : undefined} />}
       {(isLoading || filteredCores.length > 0) &&
         (viewMode === 'grid' ? (
           <ListGeneratorGrid
@@ -228,8 +247,8 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
             isLoading={isLoading}
             loadingRows={6}
             className="gap-4"
-            enableSelection
-            injectSelectionProps
+            enableSelection={canDelete}
+            injectSelectionProps={canDelete}
             selectedRowIds={selectedCoreIds}
             onSelectionChange={ids => setSelectedCoreIds(ids.map(id => Number(id)))}
             showEmptyState={false}
@@ -238,8 +257,11 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
                 core={core}
                 onEdit={() => handleRowEdit(core)}
                 onToggleStatus={handleToggleStatus}
-                onDuplicate={onDuplicateCore ? () => onDuplicateCore(core.id) : undefined}
-                onDelete={onDeleteCore ? () => onDeleteCore(core.name, core.id) : undefined}
+                onDuplicate={canCreate && onDuplicateCore ? () => onDuplicateCore(core.id) : undefined}
+                onDelete={canDelete && onDeleteCore ? () => onDeleteCore(core.name, core.id) : undefined}
+                canUpdate={canUpdate}
+                canCreate={canCreate}
+                canDelete={canDelete}
               />
             )}
             renderSkeleton={i => (
@@ -262,29 +284,31 @@ export default function Cores({ cores, onDuplicateCore, onDeleteCore }: CoresPro
             isLoading={isLoading}
             loadingRows={6}
             className="gap-3"
-            onRowClick={handleRowEdit}
-            enableSelection
+            onRowClick={canUpdate ? handleRowEdit : undefined}
+            enableSelection={canDelete}
             selectedRowIds={selectedCoreIds}
             onSelectionChange={ids => setSelectedCoreIds(ids.map(id => Number(id)))}
             showEmptyState={false}
           />
         ))}
 
-      <BulkActionAlertDialog
-        open={bulkAction === 'delete'}
-        onOpenChange={open => setBulkAction(open ? 'delete' : null)}
-        title={t('core.bulkDeleteTitle', { defaultValue: 'Delete Selected Cores' })}
-        description={t('core.bulkDeletePrompt', {
-          count: selectedCoreIds.length,
-          defaultValue: 'Are you sure you want to delete {{count}} selected cores? This action cannot be undone.',
-        })}
-        actionLabel={t('delete')}
-        onConfirm={handleBulkDelete}
-        isPending={bulkDeleteCoresMutation.isPending}
-        destructive
-      />
+      {canDelete && (
+        <BulkActionAlertDialog
+          open={bulkAction === 'delete'}
+          onOpenChange={open => setBulkAction(open ? 'delete' : null)}
+          title={t('core.bulkDeleteTitle', { defaultValue: 'Delete Selected Cores' })}
+          description={t('core.bulkDeletePrompt', {
+            count: selectedCoreIds.length,
+            defaultValue: 'Are you sure you want to delete {{count}} selected cores? This action cannot be undone.',
+          })}
+          actionLabel={t('delete')}
+          onConfirm={handleBulkDelete}
+          isPending={bulkDeleteCoresMutation.isPending}
+          destructive
+        />
+      )}
 
-      {isCoreConfigModalOpen && (
+      {isCoreConfigModalOpen && (canCreate || canUpdate) && (
         <Suspense fallback={null}>
           <CoreConfigModal
             isDialogOpen={isCoreConfigModalOpen}
