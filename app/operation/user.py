@@ -56,6 +56,7 @@ from app.db.crud.user import (
 from app.db.models import User, UserStatus, UserTemplate
 from app.models.admin import AdminDetails
 from app.models.proxy import ProxyTable
+from app.models.settings import HWIDSettings
 from app.models.stats import (
     Period,
     UserCountMetric,
@@ -133,6 +134,34 @@ def _has_permission(admin: AdminDetails, resource: str, action: str) -> bool:
         return False
 
 
+async def _resolve_users_usage_admins_filter(
+    operation: BaseOperation,
+    db: AsyncSession,
+    admin: AdminDetails,
+    requested_admins: list[str] | None,
+) -> list[str] | None:
+    """Resolve admin username filters for aggregate user usage endpoints."""
+    can_read_all_users = is_scope_all(admin, "users", "read")
+    if not requested_admins:
+        return None if can_read_all_users else [admin.username]
+
+    admins_filter = list(dict.fromkeys(requested_admins))
+    if can_read_all_users or all(username == admin.username for username in admins_filter):
+        return admins_filter
+
+    if not _has_permission(admin, "admins", "read"):
+        await operation.raise_error(message="You're not allowed", code=403)
+
+    for username in admins_filter:
+        if username == admin.username:
+            continue
+        db_admin = await get_admin(db, username, load_users=False, load_usage_logs=False)
+        if not db_admin:
+            await operation.raise_error(message="Admin not found", code=404)
+
+    return admins_filter
+
+
 logger = get_logger("user-operation")
 
 _USER_AGENT_SPLIT_RE = re.compile(r"[;/\s\(\)]+")
@@ -167,6 +196,22 @@ class UserOperation(BaseOperation):
     @staticmethod
     def _is_non_blocking_sync_operator(operator_type: OperatorType) -> bool:
         return operator_type in (OperatorType.API, OperatorType.WEB)
+
+    @staticmethod
+    def _resolve_effective_hwid_limit(
+        hwid_limit: int | None,
+        effective_hwid_conf: HWIDSettings | None,
+    ) -> int | None:
+        if hwid_limit is not None:
+            return hwid_limit
+        if effective_hwid_conf is None or not effective_hwid_conf.enabled:
+            return None
+        return effective_hwid_conf.fallback_limit
+
+    @staticmethod
+    def _apply_explicit_null_hwid_limit(db_user: User, modified_user: UserModify) -> None:
+        if "hwid_limit" in modified_user.model_fields_set and modified_user.hwid_limit is None:
+            db_user.hwid_limit = None
 
     @staticmethod
     def _format_validation_errors(error: ValidationError) -> str:
@@ -621,8 +666,7 @@ class UserOperation(BaseOperation):
             admin.role.hwid if admin.role is not None else None,
         )
 
-        if new_user.hwid_limit is None:
-            new_user.hwid_limit = 0 if effective_hwid_conf is None else (effective_hwid_conf.fallback_limit or 0)
+        effective_hwid_limit = self._resolve_effective_hwid_limit(new_user.hwid_limit, effective_hwid_conf)
 
         if not skip_role_limits:
             await self._enforce_user_limits(
@@ -633,21 +677,21 @@ class UserOperation(BaseOperation):
                 status=new_user.status,
                 on_hold_expire_duration=new_user.on_hold_expire_duration,
                 on_hold_timeout=new_user.on_hold_timeout,
-                hwid_limit=new_user.hwid_limit,
+                hwid_limit=effective_hwid_limit,
                 data_limit_reset_strategy=new_user.data_limit_reset_strategy,
                 next_plan=new_user.next_plan,
                 check_max_users=True,
             )
 
-        if new_user.hwid_limit is not None and not admin.is_owner and effective_hwid_conf is not None:
-            if effective_hwid_conf.min_limit is not None and new_user.hwid_limit < effective_hwid_conf.min_limit:
+        if effective_hwid_limit is not None and not admin.is_owner and effective_hwid_conf is not None:
+            if effective_hwid_conf.min_limit is not None and effective_hwid_limit < effective_hwid_conf.min_limit:
                 await self.raise_error(
                     message=f"HWID limit cannot be less than {effective_hwid_conf.min_limit}", code=400, db=db
                 )
             if (
                 effective_hwid_conf.max_limit is not None
                 and effective_hwid_conf.max_limit > 0
-                and (new_user.hwid_limit > effective_hwid_conf.max_limit or new_user.hwid_limit == 0)
+                and (effective_hwid_limit > effective_hwid_conf.max_limit or effective_hwid_limit == 0)
             ):
                 await self.raise_error(
                     message=f"HWID limit cannot exceed {effective_hwid_conf.max_limit}", code=400, db=db
@@ -682,9 +726,21 @@ class UserOperation(BaseOperation):
         *,
         skip_role_limits: bool = False,
     ):
-        if modified_user.hwid_limit is not None and modified_user.hwid_limit > 0:
+        modified_fields = modified_user.model_fields_set
+        hwid_limit_was_changed = "hwid_limit" in modified_fields
+        effective_hwid_conf = None
+        effective_hwid_limit = modified_user.hwid_limit
+        if hwid_limit_was_changed:
+            global_hwid_conf = await hwid_settings()
+            effective_hwid_conf = resolve_effective_hwid_settings(
+                global_hwid_conf,
+                admin.role.hwid if admin.role is not None else None,
+            )
+            effective_hwid_limit = self._resolve_effective_hwid_limit(modified_user.hwid_limit, effective_hwid_conf)
+
+        if hwid_limit_was_changed and effective_hwid_limit is not None and effective_hwid_limit > 0:
             current_count = await get_user_hwid_count(db, db_user.id)
-            if current_count > modified_user.hwid_limit:
+            if current_count > effective_hwid_limit:
                 await self.raise_error(
                     message=f"Cannot lower HWID limit below current device count ({current_count}). Remove devices first.",
                     code=400,
@@ -692,7 +748,6 @@ class UserOperation(BaseOperation):
                 )
 
         if not skip_role_limits:
-            modified_fields = modified_user.model_fields_set
             data_limit_was_changed = "data_limit" in modified_fields and modified_user.data_limit is not None
             expire_was_changed = "expire" in modified_fields and modified_user.expire is not None
             status_was_changed = modified_user.status is not None
@@ -709,10 +764,9 @@ class UserOperation(BaseOperation):
                 or (status_was_changed and status_requires_finite_expire)
                 or on_hold_duration_was_changed
             )
-            hwid_limit_was_changed = "hwid_limit" in modified_fields and modified_user.hwid_limit is not None
             on_hold_timeout_was_changed = "on_hold_timeout" in modified_fields
-            on_hold_timeout_requires_finite_limit = (
-                on_hold_timeout_was_changed or (status_was_changed and modified_status_value == UserStatus.on_hold.value)
+            on_hold_timeout_requires_finite_limit = on_hold_timeout_was_changed or (
+                status_was_changed and modified_status_value == UserStatus.on_hold.value
             )
 
             effective_status = modified_user.status if modified_user.status is not None else db_user.status
@@ -734,7 +788,7 @@ class UserOperation(BaseOperation):
                 status=effective_status,
                 on_hold_expire_duration=effective_on_hold_expire_duration,
                 on_hold_timeout=modified_user.on_hold_timeout,
-                hwid_limit=modified_user.hwid_limit,
+                hwid_limit=effective_hwid_limit,
                 data_limit_reset_strategy=modified_user.data_limit_reset_strategy,
                 next_plan=modified_user.next_plan,
                 require_finite_data_limit=data_limit_was_changed,
@@ -743,24 +797,16 @@ class UserOperation(BaseOperation):
                 require_finite_hwid_limit=hwid_limit_was_changed,
             )
 
-        if modified_user.hwid_limit is not None and not admin.is_owner:
-            global_hwid_conf = await hwid_settings()
-            effective_hwid_conf = resolve_effective_hwid_settings(
-                global_hwid_conf,
-                admin.role.hwid if admin.role is not None else None,
-            )
+        if hwid_limit_was_changed and effective_hwid_limit is not None and not admin.is_owner:
             if effective_hwid_conf is not None:
-                if (
-                    effective_hwid_conf.min_limit is not None
-                    and modified_user.hwid_limit < effective_hwid_conf.min_limit
-                ):
+                if effective_hwid_conf.min_limit is not None and effective_hwid_limit < effective_hwid_conf.min_limit:
                     await self.raise_error(
                         message=f"HWID limit cannot be less than {effective_hwid_conf.min_limit}", code=400, db=db
                     )
                 if (
                     effective_hwid_conf.max_limit is not None
                     and effective_hwid_conf.max_limit > 0
-                    and (modified_user.hwid_limit > effective_hwid_conf.max_limit or modified_user.hwid_limit == 0)
+                    and (effective_hwid_limit > effective_hwid_conf.max_limit or effective_hwid_limit == 0)
                 ):
                     await self.raise_error(
                         message=f"HWID limit cannot exceed {effective_hwid_conf.max_limit}", code=400, db=db
@@ -809,6 +855,7 @@ class UserOperation(BaseOperation):
     ) -> UserNotificationResponse:
         old_status = db_user.status
 
+        self._apply_explicit_null_hwid_limit(db_user, modified_user)
         db_user = await crud_modify_user(db, db_user, modified_user, groups=validated_groups)
         user = await self.update_user(db_user)
 
@@ -1452,7 +1499,7 @@ class UserOperation(BaseOperation):
             node_id = None
             group_by_node = False
 
-        admins_filter = query.owner if is_scope_all(admin, "users", "read") else [admin.username]
+        admins_filter = await _resolve_users_usage_admins_filter(self, db, admin, query.owner)
 
         return await get_all_users_usages(
             db=db,
@@ -1486,7 +1533,7 @@ class UserOperation(BaseOperation):
         except ValueError as exc:
             await self.raise_error(message=str(exc), code=400)
 
-        admins_filter = query.owner if is_scope_all(admin, "users", "read") else [admin.username]
+        admins_filter = await _resolve_users_usage_admins_filter(self, db, admin, query.owner)
 
         return await get_user_count_metric_stats(
             db=db,
@@ -1819,6 +1866,7 @@ class UserOperation(BaseOperation):
                         commit=False,
                     )
 
+                self._apply_explicit_null_hwid_limit(db_user, modified_user_model)
                 await crud_modify_user(
                     db,
                     db_user,

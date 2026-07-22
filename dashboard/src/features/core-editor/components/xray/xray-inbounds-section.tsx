@@ -1,6 +1,6 @@
 import { StringArrayPopoverInput } from '@/components/common/string-array-popover-input'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
@@ -18,7 +18,8 @@ import { TcpHeaderObfuscationForm } from '@/features/core-editor/components/shar
 import { VlessAdvancedGenerationModal } from '@/features/core-editor/components/shared/vless-advanced-generation-modal'
 import { isBooleanParityField, isJsonRawMessageField, transportParityFieldLabel, XrayParityFormControl } from '@/features/core-editor/components/shared/xray-parity-form-control'
 import { pruneSockoptObject, XrayStreamSockoptInboundAccordion } from '@/features/core-editor/components/shared/xray-stream-sockopt-editor'
-import { InboundTlsFallbacksEditor } from '@/features/core-editor/components/xray/inbound-tls-fallbacks-editor'
+import { XrayStreamFinalmaskInboundAccordion } from '@/features/core-editor/components/shared/xray-stream-finalmask-editor'
+import { InboundFallbacksEditor } from '@/features/core-editor/components/xray/inbound-fallbacks-editor'
 import { useSectionHeaderAddPulseEffect, type SectionHeaderAddPulse } from '@/features/core-editor/hooks/use-section-header-add-pulse'
 import { useXrayPersistModifyGuard } from '@/features/core-editor/hooks/use-xray-persist-modify-guard'
 import { createInboundDialogSchema, realityInboundZodTriggerFieldNames } from '@/features/core-editor/kit/inbound-dialog-schema'
@@ -26,8 +27,9 @@ import { getInboundSecuritySelectOptions, getInboundTransportSelectOptions, tran
 import { profileDuplicateTagMessage, profileTagHasDuplicateUsage } from '@/features/core-editor/kit/profile-tag-uniqueness'
 import { remapIndexAfterArrayMove } from '@/features/core-editor/kit/remap-index-after-move'
 import { isPlaceholderTunnelRewriteAddress, normalizeTunnelNetworkForKit } from '@/features/core-editor/kit/sanitize-inbound'
-import { inferParityFieldMode, outboundSettingToString, parseOutboundSettingValue } from '@/features/core-editor/kit/xray-parity-value'
+import { inferParityFieldMode, outboundSettingToString, parseOutboundSettingValue, stringifyJsonFormRecord } from '@/features/core-editor/kit/xray-parity-value'
 import { useCoreEditorStore } from '@/features/core-editor/state/core-editor-store'
+import { RealityScanDialog } from '@/features/core-editor/components/xray/reality-scan-dialog'
 import useDirDetection from '@/hooks/use-dir-detection'
 import { cn } from '@/lib/utils'
 import {
@@ -82,10 +84,10 @@ const SECURITY_FIELD_PREFIX = 'sec_'
 const TRANSPORT_FIELD_PREFIX = 'tr_'
 const REALITY_XVER_FIELD: XrayGeneratedFormField = { json: 'xver', go: 'Xver', type: 'uint64' }
 
-/** Inbound TLS booleans: shown in a 2-column grid after TLS fallbacks (see xray-config-kit `securityFieldOrderByType.tls`). */
+/** Inbound TLS booleans: shown in a 2-column grid after fallback rules (see xray-config-kit `securityFieldOrderByType.tls`). */
 const INBOUND_TLS_BOOLEAN_GRID_KEYS = new Set<string>(['allowInsecure', 'enableSessionResumption', 'disableSystemRoot', 'rejectUnknownSni'])
 
-/** Matches outbound DNS-rules / TLS fallbacks sub-accordion chrome. */
+/** Matches outbound DNS-rules / fallback sub-accordion chrome. */
 const INBOUND_SECURITY_SUBACCORDION_ITEM_CLASS = 'rounded-sm border px-4 [&_[data-state=closed]]:no-underline [&_[data-state=open]]:no-underline'
 
 function securityFieldName(jsonKey: string): string {
@@ -764,8 +766,8 @@ function syncVlessFieldsFromInboundForm(form: { setValue: (n: string, v: string)
   form.setValue('vlessFlow', vlessInboundFlowForForm(row))
 }
 
-function inboundSupportsTlsFallbacksModel(next: Inbound): boolean {
-  return 'transport' in next && next.transport?.type === 'tcp' && 'security' in next && next.security?.type === 'tls'
+function inboundSupportsFallbacksModel(next: Inbound): boolean {
+  return 'transport' in next && next.transport?.type === 'tcp'
 }
 
 function mergeVlessInboundStreamFields(prev: Inbound, next: Inbound): Inbound {
@@ -775,7 +777,7 @@ function mergeVlessInboundStreamFields(prev: Inbound, next: Inbound): Inbound {
   if (p.encryption !== undefined) merged.encryption = p.encryption
   if (p.decryption !== undefined) merged.decryption = p.decryption
   if (p.flow !== undefined) merged.flow = p.flow
-  if (p.fallbacks !== undefined && p.fallbacks.length > 0 && inboundSupportsTlsFallbacksModel(next)) {
+  if (p.fallbacks !== undefined && p.fallbacks.length > 0 && inboundSupportsFallbacksModel(next)) {
     merged.fallbacks = p.fallbacks
   }
   return merged as Inbound
@@ -785,7 +787,7 @@ function mergeTrojanInboundStreamFields(prev: Inbound, next: Inbound): Inbound {
   if (prev.protocol !== 'trojan' || next.protocol !== 'trojan') return next
   const p = prev as { fallbacks?: Fallback[] }
   const merged = { ...next } as { fallbacks?: Fallback[] }
-  if (p.fallbacks !== undefined && p.fallbacks.length > 0 && inboundSupportsTlsFallbacksModel(next)) {
+  if (p.fallbacks !== undefined && p.fallbacks.length > 0 && inboundSupportsFallbacksModel(next)) {
     merged.fallbacks = p.fallbacks
   }
   return merged as Inbound
@@ -900,11 +902,12 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
   const [isGeneratingRealityKeyPair, setIsGeneratingRealityKeyPair] = useState(false)
   const [isGeneratingRealityShortId, setIsGeneratingRealityShortId] = useState(false)
   const [isGeneratingMldsa65, setIsGeneratingMldsa65] = useState(false)
+  const [isRealityScanOpen, setIsRealityScanOpen] = useState(false)
+  const [realityScanTarget, setRealityScanTarget] = useState('')
   const [echUsageOption, setEchUsageOption] = useState<'default' | 'required' | 'preferred'>('default')
   const [draftInbound, setDraftInbound] = useState<Inbound | null>(null)
   const [editOriginalInbound, setEditOriginalInbound] = useState<Inbound | null>(null)
-  const [discardDraftOpen, setDiscardDraftOpen] = useState(false)
-  const [discardEditOpen, setDiscardEditOpen] = useState(false)
+
   const [blockAddWhileDraftOpen, setBlockAddWhileDraftOpen] = useState(false)
   const [isGeneratingShadowsocksPassword, setIsGeneratingShadowsocksPassword] = useState(false)
   const [shadowsocksPasswordJustGenerated, setShadowsocksPasswordJustGenerated] = useState(false)
@@ -912,6 +915,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
   const [vlessAdvancedOpen, setVlessAdvancedOpen] = useState(false)
   const [vlessAdvancedSeed, setVlessAdvancedSeed] = useState<VlessBuilderOptions | undefined>(undefined)
   const [isTagAutoGenerated, setIsTagAutoGenerated] = useState(true)
+  const [isPortAutoGenerated, setIsPortAutoGenerated] = useState(true)
   const [tunnelBlankPortMapRows, setTunnelBlankPortMapRows] = useState<{ listenPort: string; target: string }[]>([])
   const [wireguardPeerPrivateKeys, setWireguardPeerPrivateKeys] = useState<Record<number, string>>({})
   const tunnelBlankPortMapRowsRef = useRef(tunnelBlankPortMapRows)
@@ -919,6 +923,8 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
 
   const patchInboundRef = useRef<((patch: Partial<Inbound>) => void) | undefined>(undefined)
   const wireguardKitAllowedMigrateKeyRef = useRef<string | null>(null)
+  const initialDraftRef = useRef<Inbound | null>(null)
+  const initialCapturedRef = useRef(false)
 
   const inbound = useMemo(() => {
     if (!profile) return undefined
@@ -1186,9 +1192,10 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
       let tag = watchedProtocol
       let network = watchedTransport
       if (watchedProtocol === 'shadowsocks') network = watchedShadowsocksNetwork
+      if (isWireguardInboundProtocol(watchedProtocol)) network = 'udp'
 
       if (network) tag += `${tagSeparator}${network}`
-      if (watchedSecurity && watchedSecurity !== 'none') tag += `${tagSeparator}${watchedSecurity}`
+      if (!isWireguardInboundProtocol(watchedProtocol) && watchedSecurity && watchedSecurity !== 'none') tag += `${tagSeparator}${watchedSecurity}`
       if (watchedPort) tag += `${tagSeparator}${watchedPort}`
 
       tag = tag.toUpperCase()
@@ -1237,10 +1244,13 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
       port: randomInboundPort(profile),
       clientDefaults: 'empty',
     })
+    initialDraftRef.current = created
     setDraftInbound(created)
     setDialogMode('add')
     setIsTagAutoGenerated(true)
+    setIsPortAutoGenerated(true)
     setDetailOpen(true)
+    initialCapturedRef.current = false
   }, [profile, detailOpen, dialogMode, draftInbound])
 
   useSectionHeaderAddPulseEffect(headerAddPulse, headerAddEpoch, 'inbounds', beginAddInbound)
@@ -1325,15 +1335,14 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
   )
   const showTransportSection = useMemo(() => Boolean(showTransportTypeSelect || showTransportSettings || inbound?.protocol === 'hysteria'), [showTransportTypeSelect, showTransportSettings, inbound])
 
-  const showTlsFallbacksEditor = useMemo(() => {
+  const showFallbacksEditor = useMemo(() => {
     if (!inbound) return false
     if (inbound.protocol !== 'vless' && inbound.protocol !== 'trojan') return false
     if (inboundTransportType !== 'tcp') return false
-    if (inboundSecurityType !== 'tls') return false
     return true
-  }, [inbound, inboundTransportType, inboundSecurityType])
+  }, [inbound, inboundTransportType])
 
-  const inboundTlsFallbacks = useMemo((): Fallback[] | undefined => {
+  const inboundFallbacks = useMemo((): Fallback[] | undefined => {
     if (!inbound) return undefined
     if (inbound.protocol === 'vless' || inbound.protocol === 'trojan') return inbound.fallbacks
     return undefined
@@ -1513,6 +1522,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
     setDialogMode('edit')
     setDraftInbound(null)
     setEditOriginalInbound(null)
+    initialCapturedRef.current = false
   }
 
   const isTagDuplicate = useCallback(
@@ -1574,14 +1584,6 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
       setDetailOpen(true)
       return
     }
-    if (dialogMode === 'add' && draftInbound !== null) {
-      setDiscardDraftOpen(true)
-      return
-    }
-    if (dialogMode === 'edit' && inbound && inbound.protocol !== 'unmanaged' && editOriginalInbound && JSON.stringify(inbound) !== JSON.stringify(editOriginalInbound)) {
-      setDiscardEditOpen(true)
-      return
-    }
     finalizeDetailClose()
   }
 
@@ -1621,7 +1623,10 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
       setDuplicateTagError(tagValue)
       return
     }
-    if (inbound.protocol !== 'unmanaged' && 'transport' in inbound && 'security' in inbound) {
+    if (isWireguardInboundProtocol(inbound.protocol)) {
+      const ok = await form.trigger(['protocol', 'tag', 'port', 'wgSecretKey'], { shouldFocus: true })
+      if (!ok) return
+    } else if (inbound.protocol !== 'unmanaged' && 'transport' in inbound && 'security' in inbound) {
       const fields = ['protocol', 'tag', 'port', ...(form.getValues('security') === 'reality' ? realityInboundZodTriggerFieldNames() : [])]
       const ok = await form.trigger(fields, { shouldFocus: true })
       if (!ok) return
@@ -1631,9 +1636,6 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
     } else if (inbound.protocol === 'tun') {
       const ok = await form.trigger(['protocol', 'tag', 'tunName', 'tunMtu'], { shouldFocus: true })
       if (!ok) return
-    } else if (inbound.protocol === 'wireguard') {
-      const ok = await form.trigger(['protocol', 'tag', 'port', 'wgSecretKey'], { shouldFocus: true })
-      if (!ok) return
     }
     if (!validateWireguardInboundForCommit(inbound)) return
     let nextInbound: Inbound = inbound
@@ -1641,11 +1643,6 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
     if ('security' in nextInbound && nextInbound.security && form.getValues('security') === 'none') {
       // When switching from TLS/Reality to none, force-drop advanced security keys.
       nextInbound = { ...nextInbound, security: { type: 'none' } } as unknown as Inbound
-      if (nextInbound.protocol === 'vless' || nextInbound.protocol === 'trojan') {
-        const copy = { ...nextInbound } as Record<string, unknown>
-        delete copy.fallbacks
-        nextInbound = copy as Inbound
-      }
     }
 
     const selectedTransport = form.getValues('transport') as Transport['type'] | undefined
@@ -1769,6 +1766,25 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
     const raw = (inbound as { streamAdvanced?: { sockopt?: Record<string, unknown> } }).streamAdvanced?.sockopt
     const sockValue = raw && typeof raw === 'object' && !Array.isArray(raw) ? ({ ...raw } as Record<string, unknown>) : undefined
     return <XrayStreamSockoptInboundAccordion accordionItemClassName={INBOUND_SECURITY_SUBACCORDION_ITEM_CLASS} value={sockValue} onChange={patchInboundSockopt} t={t} />
+  }
+
+  function patchInboundFinalmask(next: Record<string, unknown> | undefined) {
+    if (!inbound || inbound.protocol === 'unmanaged' || inbound.protocol === 'tun') return
+    const baseRec = { ...(inbound as Record<string, unknown>) }
+    const prevSa = (baseRec.streamAdvanced as Record<string, unknown> | undefined) ?? {}
+    const sa = { ...prevSa }
+    if (next === undefined) delete sa.finalmask
+    else sa.finalmask = next
+    if (Object.keys(sa).length === 0) delete baseRec.streamAdvanced
+    else baseRec.streamAdvanced = sa
+    replaceEffectiveInbound(baseRec as Inbound)
+  }
+
+  function renderInboundFinalmask() {
+    if (!inbound || inbound.protocol === 'unmanaged' || inbound.protocol === 'tun') return null
+    const raw = (inbound as { streamAdvanced?: { finalmask?: Record<string, unknown> } }).streamAdvanced?.finalmask
+    const finalmaskValue = raw && typeof raw === 'object' && !Array.isArray(raw) ? ({ ...raw } as Record<string, unknown>) : undefined
+    return <XrayStreamFinalmaskInboundAccordion accordionItemClassName={INBOUND_SECURITY_SUBACCORDION_ITEM_CLASS} value={finalmaskValue} onChange={patchInboundFinalmask} t={t} />
   }
 
   const patchInbound = (patch: Partial<Inbound>) => {
@@ -1944,7 +1960,11 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
         if (!patch.masquerade || Object.keys(patch.masquerade).length === 0) {
           delete nextTransport.masquerade
         } else {
-          const mergedMasquerade = { ...(nextTransport.masquerade ?? {}), ...patch.masquerade } as Record<string, unknown>
+          const previousMasquerade =
+            nextTransport.masquerade && typeof nextTransport.masquerade === 'object' && !Array.isArray(nextTransport.masquerade) ? (nextTransport.masquerade as Record<string, unknown>) : {}
+          const patchType = typeof patch.masquerade.type === 'string' ? patch.masquerade.type : undefined
+          const previousType = typeof previousMasquerade.type === 'string' ? previousMasquerade.type : undefined
+          const mergedMasquerade = { ...(patchType && patchType !== previousType ? {} : previousMasquerade), ...patch.masquerade } as Record<string, unknown>
           for (const [k, v] of Object.entries(mergedMasquerade)) {
             if (v === undefined || (typeof v === 'string' && v.trim() === '')) delete mergedMasquerade[k]
           }
@@ -2428,6 +2448,36 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
       <CoreEditorFormDialog
         isDialogOpen={detailOpen}
         onOpenChange={handleDetailOpenChange}
+        initialData={
+          dialogMode === 'add'
+            ? (() => {
+                const init = initialDraftRef.current ? JSON.parse(JSON.stringify(initialDraftRef.current)) : null
+                if (init) {
+                  if (isTagAutoGenerated) delete init.tag
+                  if (isPortAutoGenerated) delete init.port
+                }
+                return init
+              })()
+            : (editOriginalInbound ?? null)
+        }
+        getCurrentData={() => {
+          const cur = dialogMode === 'add' ? draftInbound : inbound
+          const copy = cur ? JSON.parse(JSON.stringify(cur)) : null
+          if (dialogMode === 'add' && copy) {
+            if (isTagAutoGenerated) delete copy.tag
+            if (isPortAutoGenerated) delete copy.port
+          }
+          return copy
+        }}
+        discardTitle={
+          dialogMode === 'add' ? t('coreEditor.inbound.discardDraftTitle', { defaultValue: 'Discard new inbound?' }) : t('coreEditor.inbound.discardEditTitle', { defaultValue: 'Discard changes?' })
+        }
+        discardDescription={
+          dialogMode === 'add'
+            ? t('coreEditor.inbound.discardDraftDescription', { defaultValue: 'This inbound is not in the list yet. Close without adding it will discard your changes.' })
+            : t('coreEditor.inbound.discardEditDescription', { defaultValue: 'Your modifications to this inbound will be lost if you close now.' })
+        }
+        discardActionLabel={t('coreEditor.inbound.discardDraftAction', { defaultValue: 'Discard' })}
         inlinePersistValidation={!(detailOpen && dialogMode === 'add')}
         persistValidationPathPrefix={detailOpen && dialogMode === 'edit' ? `/inbounds/${selected + 1}` : undefined}
         leadingIcon={dialogMode === 'add' ? <Plus className="h-5 w-5 shrink-0" /> : <Pencil className="h-5 w-5 shrink-0" />}
@@ -2449,7 +2499,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
           <p className="text-muted-foreground text-sm">{t('coreEditor.inbound.unmanagedHint', { defaultValue: 'This inbound is managed as raw JSON in Advanced.' })}</p>
         )}
 
-        {inbound && inbound.protocol !== 'unmanaged' && 'transport' in inbound && 'security' in inbound && (
+        {inbound && inbound.protocol !== 'unmanaged' && !isWireguardInboundProtocol(inbound.protocol) && 'transport' in inbound && 'security' in inbound && (
           <Form {...form}>
             <form className="flex flex-col gap-4 pb-6" onSubmit={e => e.preventDefault()}>
               <div className="grid gap-4 sm:grid-cols-2">
@@ -2581,6 +2631,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                             onChange={e => {
                               const v = e.target.value
                               field.onChange(v)
+                              setIsPortAutoGenerated(false)
                               if (v.trim() === '') patchInbound({ port: undefined } as Partial<Inbound>)
                               else {
                                 const n = Number(v)
@@ -2596,6 +2647,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                             onClick={() => {
                               const p = randomInboundPort(profile)
                               field.onChange(String(p))
+                              setIsPortAutoGenerated(false)
                               patchInbound({ port: p } as Partial<Inbound>)
                             }}
                             title={t('coreEditor.inbound.randomPort', { defaultValue: 'Generate random port' })}
@@ -3315,7 +3367,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                                               }
                                             })()}
                                             onValueChange={next => {
-                                              const stringified = JSON.stringify(next, null, 2)
+                                              const stringified = stringifyJsonFormRecord(next as Record<string, unknown>)
                                               field.onChange(stringified)
                                               try {
                                                 patchTransport({ [jsonKey]: parseOutboundSettingValue(def, stringified) })
@@ -3971,6 +4023,23 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                                   </LoaderButton>
                                 </div>
                               )}
+                              {isReality && jsonKey === 'target' && (
+                                <div className="sm:col-span-2">
+                                  <LoaderButton
+                                    type="button"
+                                    variant="outline"
+                                    onClick={() => {
+                                      const destValue = form.getValues(securityFieldName('target'))
+                                      setRealityScanTarget(typeof destValue === 'string' ? destValue : '')
+                                      setIsRealityScanOpen(true)
+                                    }}
+                                    className="h-10 w-full text-sm font-medium transition-all hover:shadow-md sm:h-11"
+                                    isLoading={false}
+                                  >
+                                    <span className="flex items-center gap-2 truncate">{t('coreConfigModal.scanRealityTarget', { defaultValue: 'Scan target' })}</span>
+                                  </LoaderButton>
+                                </div>
+                              )}
                             </Fragment>
                           )
                         })}
@@ -3978,9 +4047,9 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                     </div>
                   </>
                 )}
-                {showTlsFallbacksEditor && inbound ? (
+                {showFallbacksEditor && inbound ? (
                   <div className="sm:col-span-2">
-                    <InboundTlsFallbacksEditor fallbacks={inboundTlsFallbacks} onPersist={fb => patchInbound({ fallbacks: fb } as Partial<Inbound>)} />
+                    <InboundFallbacksEditor fallbacks={inboundFallbacks} onPersist={fb => patchInbound({ fallbacks: fb } as Partial<Inbound>)} />
                   </div>
                 ) : null}
                 {inboundSecurityType === 'tls' && inboundTlsBooleanGridFieldOrder.length > 0 ? (
@@ -4020,6 +4089,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                   </div>
                 ) : null}
                 {renderInboundSockopt()}
+                {renderInboundFinalmask()}
                 {inbound.protocol !== 'hysteria' ? renderSniffingAccordion() : null}
               </div>
             </form>
@@ -4433,13 +4503,14 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                 />
 
                 {renderInboundSockopt()}
+                {renderInboundFinalmask()}
                 {renderSniffingAccordion()}
               </div>
             </form>
           </Form>
         )}
 
-        {inbound && inbound.protocol !== 'unmanaged' && !('transport' in inbound) && !isTunnelInboundProtocol(inbound.protocol) && (
+        {inbound && inbound.protocol !== 'unmanaged' && (isWireguardInboundProtocol(inbound.protocol) || !('transport' in inbound)) && !isTunnelInboundProtocol(inbound.protocol) && (
           <Form {...form}>
             <form className="space-y-4" onSubmit={e => e.preventDefault()}>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -5250,6 +5321,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                 )}
 
                 {renderInboundSockopt()}
+                {renderInboundFinalmask()}
                 {renderSniffingAccordion()}
               </div>
             </form>
@@ -5275,56 +5347,9 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
         }}
       />
 
-      <AlertDialog open={discardDraftOpen} onOpenChange={setDiscardDraftOpen}>
-        <AlertDialogContent dir={dir}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('coreEditor.inbound.discardDraftTitle', { defaultValue: 'Discard new inbound?' })}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('coreEditor.inbound.discardDraftDescription', {
-                defaultValue: 'This inbound is not in the list yet. Close without adding it will discard your changes.',
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setDiscardDraftOpen(false)
-                finalizeDetailClose()
-              }}
-            >
-              {t('coreEditor.inbound.discardDraftAction', { defaultValue: 'Discard' })}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
-      <AlertDialog open={discardEditOpen} onOpenChange={setDiscardEditOpen}>
-        <AlertDialogContent dir={dir}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('coreEditor.inbound.discardEditTitle', { defaultValue: 'Discard changes?' })}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('coreEditor.inbound.discardEditDescription', {
-                defaultValue: 'Your modifications to this inbound will be lost if you close now.',
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (dialogMode === 'edit' && editOriginalInbound) {
-                  updateXrayProfile(p => replaceInbound(p, selected, editOriginalInbound))
-                }
-                setDiscardEditOpen(false)
-                finalizeDetailClose()
-              }}
-            >
-              {t('coreEditor.inbound.discardDraftAction', { defaultValue: 'Discard' })}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+
+      <RealityScanDialog open={isRealityScanOpen} onOpenChange={setIsRealityScanOpen} initialTarget={realityScanTarget} />
 
       <AlertDialog open={blockAddWhileDraftOpen} onOpenChange={setBlockAddWhileDraftOpen}>
         <AlertDialogContent dir={dir}>

@@ -1,10 +1,10 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, case, delete, func, insert, not_, select, update
+from sqlalchemy import and_, case, delete, func, not_, select, update
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.exc import DetachedInstanceError
-from sqlalchemy.exc import InvalidRequestError
 
 from app.db.crud.general import (
     _build_trunc_expression,
@@ -12,7 +12,16 @@ from app.db.crud.general import (
     get_complete_period_start_for_filter,
     to_utc_for_filter,
 )
-from app.db.models import Admin, AdminNotificationReminder, AdminRole, AdminUsageLogs, NodeUserUsage, ReminderType, User
+from app.db.models import (
+    APIKey,
+    Admin,
+    AdminNotificationReminder,
+    AdminRole,
+    AdminUsageLogs,
+    NodeUserUsage,
+    ReminderType,
+    User,
+)
 from app.models.admin import (
     AdminCreate,
     AdminDetails,
@@ -82,6 +91,7 @@ def build_admin_details(
         sub_domain=db_admin.sub_domain,
         profile_title=db_admin.profile_title,
         support_url=db_admin.support_url,
+        custom_variables=db_admin.custom_variables or [],
         note=db_admin.note,
         notification_enable=db_admin.notification_enable,
         sub_template=db_admin.sub_template,
@@ -213,6 +223,8 @@ async def update_admin(db: AsyncSession, db_admin: Admin, modified_admin: AdminM
         db_admin.support_url = modified_admin.support_url
     if modified_admin.profile_title is not None:
         db_admin.profile_title = modified_admin.profile_title
+    if modified_admin.custom_variables is not None:
+        db_admin.custom_variables = [variable.model_dump() for variable in modified_admin.custom_variables]
     if modified_admin.note is not None:
         db_admin.note = modified_admin.note
     if modified_admin.notification_enable is not None:
@@ -232,6 +244,7 @@ async def remove_admin(db: AsyncSession, dbadmin: Admin) -> None:
         db (AsyncSession): Database session.
         dbadmin (Admin): The admin object to be removed.
     """
+    await db.execute(delete(APIKey).where(APIKey.admin_id == dbadmin.id))
     await db.delete(dbadmin)
     await db.commit()
 
@@ -517,8 +530,32 @@ async def bulk_create_admin_notification_reminders(db: AsyncSession, reminder_da
     if not reminder_data:
         return
 
-    await db.execute(insert(AdminNotificationReminder), reminder_data)
+    db.add_all([AdminNotificationReminder(**data) for data in reminder_data])
     await db.commit()
+
+
+async def create_admin_notification_reminder_if_absent(
+    db: AsyncSession,
+    admin_id: int,
+    reminder_type: ReminderType,
+    threshold: int | None = None,
+) -> bool:
+    """Create an admin reminder row and return whether this call claimed it."""
+    existing_reminder_id = await db.scalar(
+        select(AdminNotificationReminder.id)
+        .where(
+            AdminNotificationReminder.admin_id == admin_id,
+            AdminNotificationReminder.type == reminder_type,
+            AdminNotificationReminder.threshold == threshold,
+        )
+        .limit(1)
+    )
+    if existing_reminder_id is not None:
+        return False
+
+    db.add(AdminNotificationReminder(admin_id=admin_id, type=reminder_type, threshold=threshold))
+    await db.commit()
+    return True
 
 
 async def delete_admin_notification_reminders(
@@ -768,6 +805,7 @@ async def remove_admins(db: AsyncSession, admin_ids: list[int]) -> None:
         return
 
     await db.execute(update(User).where(User.admin_id.in_(admin_ids)).values(admin_id=None))
+    await db.execute(delete(APIKey).where(APIKey.admin_id.in_(admin_ids)))
     await db.execute(delete(AdminUsageLogs).where(AdminUsageLogs.admin_id.in_(admin_ids)))
     await db.execute(delete(Admin).where(Admin.id.in_(admin_ids)))
     await db.commit()

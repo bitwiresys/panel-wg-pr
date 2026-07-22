@@ -10,6 +10,27 @@ from .notification_enable import NotificationEnable
 from .validators import DiscordValidator, ProxyValidator, URLValidator
 
 TELEGRAM_TOKEN_PATTERN = r"^\d{8,12}:[A-Za-z0-9_-]{35}$"
+BUILTIN_FORMAT_VARIABLES = {
+    "SERVER_IP",
+    "SERVER_IPV6",
+    "USERNAME",
+    "DATA_USAGE",
+    "DATA_LIMIT",
+    "DATA_LEFT",
+    "DAYS_LEFT",
+    "EXPIRE_DATE",
+    "JALALI_EXPIRE_DATE",
+    "TIME_LEFT",
+    "STATUS_EMOJI",
+    "USAGE_PERCENTAGE",
+    "ADMIN_USERNAME",
+    "PROFILE_TITLE",
+    "PROTOCOL",
+    "TRANSPORT",
+    "url",
+    "format",
+}
+BUILTIN_CUSTOM_VARIABLE_KEYS = {variable.upper() for variable in BUILTIN_FORMAT_VARIABLES}
 
 
 class RunMethod(StrEnum):
@@ -118,6 +139,7 @@ class NotificationChannels(BaseModel):
     node: NotificationChannel = Field(default_factory=NotificationChannel)
     user: NotificationChannel = Field(default_factory=NotificationChannel)
     user_template: NotificationChannel = Field(default_factory=NotificationChannel)
+    api_key: NotificationChannel = Field(default_factory=NotificationChannel)
 
 
 class NotificationSettings(BaseModel):
@@ -239,6 +261,50 @@ class Application(BaseModel):
         return v
 
 
+class CustomVariable(BaseModel):
+    key: str = Field(max_length=64)
+    value: str = Field(default="", max_length=512)
+
+    @field_validator("key", mode="before")
+    @classmethod
+    def normalize_key(cls, value):
+        if not isinstance(value, str):
+            raise ValueError("Variable key must be a string")
+        value = value.strip()
+        if value.startswith("{") and value.endswith("}"):
+            value = value[1:-1].strip()
+        return value.upper()
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", value):
+            raise ValueError("Variable key must use uppercase letters, numbers, and underscores")
+        return value
+
+    @field_validator("value")
+    @classmethod
+    def validate_value_format(cls, value: str) -> str:
+        try:
+            value.format_map({key: "" for key in BUILTIN_FORMAT_VARIABLES})
+        except ValueError:
+            raise ValueError("Invalid formatting variables")
+        except KeyError:
+            pass
+        return value
+
+
+def validate_custom_variables(value: list[CustomVariable]) -> list[CustomVariable]:
+    seen: set[str] = set()
+    for variable in value:
+        if variable.key.upper() in BUILTIN_CUSTOM_VARIABLE_KEYS:
+            raise ValueError(f"Custom variable {variable.key} conflicts with a built-in variable")
+        if variable.key in seen:
+            raise ValueError(f"Duplicate custom variable {variable.key}")
+        seen.add(variable.key)
+    return value
+
+
 class Subscription(BaseModel):
     url_prefix: str = Field(default="")
     update_interval: int = Field(default=12)
@@ -255,6 +321,12 @@ class Subscription(BaseModel):
     allow_browser_config: bool = Field(default=True)
     disable_sub_template: bool = Field(default=False)
     randomize_order: bool = Field(default=False)
+    custom_variables: list[CustomVariable] = Field(default_factory=list)
+
+    @field_validator("custom_variables")
+    @classmethod
+    def validate_custom_variables(cls, value: list[CustomVariable]) -> list[CustomVariable]:
+        return validate_custom_variables(value)
 
     @field_validator("applications")
     @classmethod
@@ -286,6 +358,14 @@ class HWIDSettings(BaseModel):
 
 class General(BaseModel):
     default_method: ShadowsocksMethods = Field(default=ShadowsocksMethods.CHACHA20_POLY1305)
+    custom_variables: list[CustomVariable] | None = Field(default=None)
+
+    @field_validator("custom_variables")
+    @classmethod
+    def validate_custom_variables(cls, value: list[CustomVariable] | None) -> list[CustomVariable] | None:
+        if value is None:
+            return None
+        return validate_custom_variables(value)
 
 
 class SettingsSchema(BaseModel):

@@ -15,7 +15,7 @@ from fastapi import status
 from sqlalchemy import func, select, update
 
 from app.db.crud.hwid import register_user_hwid
-from app.db.models import NodeUserUsage, User
+from app.db.models import NodeUserUsage, User, UserStatus
 from app.models.settings import ConfigFormat, SubRule, Subscription
 from app.models.stats import Period, UserCountMetric, UserCountMetricStat, UserCountMetricStatsList
 from app.models.validators import MAX_ON_HOLD_EXPIRE_DURATION_SECONDS
@@ -214,6 +214,65 @@ def test_user_create_active(access_token):
         assert response_formatted == expected_formatted
     finally:
         delete_user(access_token, user["username"])
+        cleanup_groups(access_token, core, groups)
+
+
+def test_user_hwid_limit_stays_null_on_create_and_null_modify_clears(access_token):
+    core, groups = setup_groups(access_token, 1)
+    group_ids = [group["id"] for group in groups]
+    expire = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=30)
+    usernames: list[str] = []
+
+    try:
+        user = create_user(
+            access_token,
+            group_ids=group_ids,
+            payload={
+                "username": unique_name("test_user_empty_hwid"),
+                "proxy_settings": {},
+                "expire": expire.isoformat(),
+                "data_limit": 1024 * 1024 * 1024,
+                "data_limit_reset_strategy": "no_reset",
+                "status": "active",
+            },
+        )
+        usernames.append(user["username"])
+        assert user["hwid_limit"] is None
+
+        explicit_null = create_user(
+            access_token,
+            group_ids=group_ids,
+            payload={
+                "username": unique_name("test_user_null_hwid"),
+                "proxy_settings": {},
+                "expire": expire.isoformat(),
+                "data_limit": 1024 * 1024 * 1024,
+                "data_limit_reset_strategy": "no_reset",
+                "hwid_limit": None,
+                "status": "active",
+            },
+        )
+        usernames.append(explicit_null["username"])
+        assert explicit_null["hwid_limit"] is None
+
+        response = client.put(
+            f"/api/user/{user['username']}",
+            headers=auth_headers(access_token),
+            json={"hwid_limit": 2},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["hwid_limit"] == 2
+
+        response = client.put(
+            f"/api/user/{user['username']}",
+            headers=auth_headers(access_token),
+            json={"hwid_limit": None},
+        )
+        assert response.status_code == status.HTTP_200_OK
+        assert response.json()["hwid_limit"] is None
+    finally:
+        for username in usernames:
+            delete_user(access_token, username)
         cleanup_groups(access_token, core, groups)
 
 
@@ -795,6 +854,33 @@ def test_user_subscriptions(access_token):
         cleanup_groups(access_token, core, groups)
 
 
+def test_user_subscription_head_route(access_token):
+    """Test that HEAD /{token} returns headers without a body."""
+    core, groups = setup_groups(access_token, 1)
+    hosts = create_hosts_for_inbounds(access_token)
+    user = create_user(
+        access_token,
+        group_ids=[group["id"] for group in groups],
+        payload={"username": unique_name("test_head_sub")},
+    )
+    try:
+        url = user["subscription_url"]
+        for test_url in (url, f"{url}/"):
+            head_response = client.head(test_url)
+            assert head_response.status_code == status.HTTP_200_OK
+            assert head_response.content == b""
+            get_response = client.get(test_url)
+            assert get_response.status_code == status.HTTP_200_OK
+            for header in ("subscription-userinfo", "profile-title", "profile-update-interval"):
+                if header in get_response.headers:
+                    assert head_response.headers.get(header) == get_response.headers.get(header)
+    finally:
+        delete_user(access_token, user["username"])
+        for host in hosts:
+            client.delete(f"/api/host/{host['id']}", headers={"Authorization": f"Bearer {access_token}"})
+        cleanup_groups(access_token, core, groups)
+
+
 def test_user_routes_by_id_and_by_username(access_token):
     core, groups = setup_groups(access_token, 1)
     user = create_user(access_token, group_ids=[groups[0]["id"]], payload={"username": unique_name("id_routes_user")})
@@ -1098,6 +1184,9 @@ def test_wireguard_subscription_outputs_are_consistent(access_token):
             "port": 51820,
             "inbound_tag": interface_name,
             "priority": 1,
+            "wireguard_overrides": {
+                "dns": ["1.1.1.1", "8.8.8.8"],
+            },
         },
     )
     assert host_response.status_code == status.HTTP_201_CREATED
@@ -1128,6 +1217,7 @@ def test_wireguard_subscription_outputs_are_consistent(access_token):
         assert dynamic_address == user["proxy_settings"]["wireguard"]["peer_ips"][0]
         assert dynamic_address.endswith("/32")
         assert query["allowedips"] == ["0.0.0.0/0,::/0"]
+        assert query["dns"] == ["1.1.1.1,8.8.8.8"]
         assert unquote(parsed.fragment) == expected_remark
 
         config_bodies = extract_wireguard_config_bodies(wireguard_response)
@@ -1138,6 +1228,7 @@ def test_wireguard_subscription_outputs_are_consistent(access_token):
         assert f"Address = {dynamic_address}" in body
         assert f"PublicKey = {interface_public_key}" in body
         assert "AllowedIPs = 0.0.0.0/0, ::/0" in body
+        assert "DNS = 1.1.1.1, 8.8.8.8" in body
         assert f"Endpoint = {endpoint}:51820" in body
     finally:
         delete_user(access_token, user["username"])
@@ -1894,6 +1985,42 @@ def test_reset_user_usage(access_token):
         cleanup_groups(access_token, core, groups)
 
 
+def test_reset_on_hold_user_usage_preserves_hold_state(access_token):
+    core, groups = setup_groups(access_token, 1)
+    user = create_user(
+        access_token,
+        group_ids=[groups[0]["id"]],
+        payload={
+            "username": unique_name("test_on_hold_reset"),
+            "status": "on_hold",
+            "on_hold_expire_duration": 3600,
+        },
+    )
+
+    async def _seed_usage():
+        async with TestSession() as session:
+            await session.execute(update(User).where(User.id == user["id"]).values(used_traffic=100))
+            await session.commit()
+
+    try:
+        asyncio.run(_seed_usage())
+
+        response = client.post(
+            f"/api/user/by-id/{user['id']}/reset",
+            headers=auth_headers(access_token),
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        data = response.json()
+        assert data["status"] == "on_hold"
+        assert data["on_hold_expire_duration"] == 3600
+        assert data["expire"] is None
+        assert data["used_traffic"] == 0
+    finally:
+        delete_user(access_token, user["username"])
+        cleanup_groups(access_token, core, groups)
+
+
 def test_reset_user_usage_only_cleans_chart_data_when_enabled(access_token):
     """Test that user reset preserves chart data unless env cleanup is enabled."""
     core, groups = setup_groups(access_token, 1)
@@ -2306,6 +2433,50 @@ def test_enable_disabled_user_resolves_expired_limited_on_hold_and_active_status
     finally:
         for user in users:
             delete_user(access_token, user["username"])
+        cleanup_groups(access_token, core, groups)
+
+
+def test_generic_disable_enable_on_hold_user_preserves_hold_state(access_token):
+    core, groups = setup_groups(access_token, 1)
+    user = create_user(
+        access_token,
+        group_ids=[groups[0]["id"]],
+        payload={
+            "username": unique_name("modify_toggle_on_hold"),
+            "status": "on_hold",
+            "on_hold_expire_duration": 3600,
+        },
+    )
+
+    try:
+        disable_response = client.put(
+            f"/api/user/by-id/{user['id']}",
+            headers=auth_headers(access_token),
+            json={"status": "disabled"},
+        )
+        assert disable_response.status_code == status.HTTP_200_OK
+        assert disable_response.json()["status"] == "disabled"
+
+        enable_response = client.put(
+            f"/api/user/by-id/{user['id']}",
+            headers=auth_headers(access_token),
+            json={"status": "active"},
+        )
+        assert enable_response.status_code == status.HTTP_200_OK
+        assert enable_response.json()["status"] == "on_hold"
+        assert enable_response.json()["on_hold_expire_duration"] == 3600
+
+        async def _get_db_status():
+            async with TestSession() as session:
+                db_user = (await session.execute(select(User).where(User.id == user["id"]))).scalar_one()
+                return db_user.status, db_user.on_hold_expire_duration, db_user.expire
+
+        db_status, on_hold_expire_duration, expire = asyncio.run(_get_db_status())
+        assert db_status == UserStatus.on_hold
+        assert on_hold_expire_duration == 3600
+        assert expire is None
+    finally:
+        delete_user(access_token, user["username"])
         cleanup_groups(access_token, core, groups)
 
 

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { customVariablesSchema } from '@/features/subscriptions/components/subscription-settings-schema'
 
 export const adminStatusEditEnum = z.enum(['active', 'disabled'])
 
@@ -60,6 +61,7 @@ export const adminFormSchema = z
     support_url: z.string().optional(),
     telegram_id: z.number().optional(),
     profile_title: z.string().optional(),
+    custom_variables: customVariablesSchema,
     note: z.string().optional(),
     notification_enable: z
       .object({
@@ -149,6 +151,7 @@ export const adminFormDefaultValues: Partial<AdminFormValuesInput> = {
   support_url: '',
   telegram_id: undefined,
   profile_title: '',
+  custom_variables: [],
   note: '',
   notification_enable: {
     create: true,

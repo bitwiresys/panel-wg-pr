@@ -7,6 +7,7 @@ from app.models.core import CoreResponse
 from app.models.group import GroupResponse
 from app.models.host import BaseHost
 from app.models.node import NodeNotification, NodeResponse
+from app.models.api_key import APIKeyResponse
 from app.models.user import UserNotificationResponse
 from app.models.user_template import UserTemplateResponse
 from app.settings import notification_enable
@@ -45,6 +46,27 @@ def _safe_notification_task(func):
             )
 
     return wrapper
+
+
+async def create_api_key(api_key: APIKeyResponse, admin_username: str, by: str):
+    if (await notification_enable()).api_key.create:
+        await asyncio.gather(
+            ds.create_api_key(api_key, admin_username, by), tg.create_api_key_tg(api_key, admin_username, by)
+        )
+
+
+async def modify_api_key(api_key: APIKeyResponse, admin_username: str, by: str):
+    if (await notification_enable()).api_key.modify:
+        await asyncio.gather(
+            ds.modify_api_key(api_key, admin_username, by), tg.modify_api_key_tg(api_key, admin_username, by)
+        )
+
+
+async def remove_api_key(api_key: APIKeyResponse, admin_username: str, by: str):
+    if (await notification_enable()).api_key.delete:
+        await asyncio.gather(
+            ds.remove_api_key(api_key, admin_username, by), tg.remove_api_key_tg(api_key, admin_username, by)
+        )
 
 
 async def create_admin_role(role: AdminRoleResponse, by: str):
@@ -121,6 +143,11 @@ async def remove_node(node: NodeResponse, by: str):
 async def connect_node(node: NodeNotification):
     if (await notification_enable()).node.connect:
         await _gather_notifications("connect_node", ds.connect_node(node), tg.connect_node(node))
+
+
+async def recovered_node(node: NodeNotification):
+    if (await notification_enable()).node.recovered:
+        await _gather_notifications("recovered_node", ds.recovered_node(node), tg.recovered_node(node))
 
 
 async def error_node(node: NodeNotification):
@@ -301,6 +328,7 @@ for _task_name in (
     "modify_node",
     "remove_node",
     "connect_node",
+    "recovered_node",
     "error_node",
     "limited_node",
     "reset_node_usage",

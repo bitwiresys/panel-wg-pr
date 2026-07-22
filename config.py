@@ -88,6 +88,10 @@ class NatsSettings(EnvSettings):
     node_log_subject: str = Field(default="pasarguard.node.logs", validation_alias="NATS_NODE_LOG_SUBJECT")
     node_rpc_timeout: float = Field(default=30.0, validation_alias="NATS_NODE_RPC_TIMEOUT")
     scheduler_rpc_timeout: float = Field(default=5.0, validation_alias="NATS_SCHEDULER_RPC_TIMEOUT")
+    node_command_max_payload_bytes: int = Field(
+        default=900000, validation_alias="NATS_NODE_COMMAND_MAX_PAYLOAD_BYTES"
+    )
+    node_update_users_batch_size: int = Field(default=100, validation_alias="NATS_NODE_UPDATE_USERS_BATCH_SIZE")
     core_pubsub_channel: str = Field(default="core_hosts_updates", validation_alias="CORE_PUBSUB_CHANNEL")
     host_pubsub_channel: str = Field(default="host_manager_updates", validation_alias="HOST_PUBSUB_CHANNEL")
     telegram_kv_bucket: str = Field(default="pasarguard_telegram", validation_alias="NATS_TELEGRAM_KV_BUCKET")
@@ -221,13 +225,6 @@ usage_settings = UsageSettings()
 job_settings = JobSettings()
 feature_settings = FeatureSettings()
 wireguard_settings = WireGuardSettings()
-
-# Top-level aliases consumed by various app modules
-WIREGUARD_GLOBAL_POOL = wireguard_settings.global_pool
-WIREGUARD_RESERVED = wireguard_settings.reserved
-ROLE = runtime_settings.role
-SUBSCRIPTION_PATH = subscription_env_settings.fallback_path
-SUDOERS = auth_settings.sudoers
 
 if not database_settings.is_postgresql:
     usage_settings.enable_recording_nodes_stats = False

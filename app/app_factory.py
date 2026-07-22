@@ -20,6 +20,10 @@ from config import runtime_settings, subscription_env_settings
 logger = get_logger("app-factory")
 
 
+async def _ignore_worker_sync_message(_: dict):
+    return None
+
+
 async def database_operational_error_handler(request: Request, exc: DBAPIError):
     orig = getattr(exc, "orig", None)
     error_summary = f"{type(orig).__name__}: {orig}" if orig else type(exc).__name__
@@ -31,12 +35,33 @@ async def database_operational_error_handler(request: Request, exc: DBAPIError):
 
 
 def _use_route_names_as_operation_ids(app: FastAPI) -> None:
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            route.operation_id = route.name
+    def _simplify_operation_ids(routes):
+        for route in routes:
+            if isinstance(route, APIRoute):
+                route.operation_id = route.name
+            elif type(route).__name__ == "_IncludedRouter" and hasattr(route, "original_router"):
+                _simplify_operation_ids(route.original_router.routes)
+            elif hasattr(route, "routes"):
+                _simplify_operation_ids(route.routes)
+
+    _simplify_operation_ids(app.routes)
 
 
-def _register_nats_handlers(enable_router: bool, enable_settings: bool, enable_client_templates: bool):
+def _validate_subscription_path(app: FastAPI) -> None:
+    paths = [f"{path}/" for route in app.routes if (path := getattr(route, "path", None)) is not None]
+    paths.append("/api/")
+    if f"/{subscription_env_settings.path}/" in paths:
+        raise ValueError(
+            f"you can't use /{subscription_env_settings.path}/ as subscription path it reserved for {app.title}"
+        )
+
+
+def _register_nats_handlers(
+    enable_router: bool,
+    enable_settings: bool,
+    enable_client_templates: bool,
+    ignore_host_messages: bool = False,
+):
     if enable_router:
         on_startup(router.start)
         on_shutdown(router.stop)
@@ -44,6 +69,8 @@ def _register_nats_handlers(enable_router: bool, enable_settings: bool, enable_c
         router.register_handler(MessageTopic.SETTING, handle_settings_message)
     if enable_client_templates:
         router.register_handler(MessageTopic.CLIENT_TEMPLATE, handle_client_template_message)
+    if ignore_host_messages:
+        router.register_handler(MessageTopic.HOST, _ignore_worker_sync_message)
 
 
 def _register_scheduler_hooks():
@@ -92,15 +119,7 @@ def create_app() -> FastAPI:
 
     setup_middleware(app)
 
-    def _validate_paths():
-        paths = [f"{r.path}/" for r in app.routes]
-        paths.append("/api/")
-        if f"/{subscription_env_settings.path}/" in paths:
-            raise ValueError(
-                f"you can't use /{subscription_env_settings.path}/ as subscription path it reserved for {app.title}"
-            )
-
-    on_startup(_validate_paths)
+    on_startup(_validate_subscription_path)
 
     if runtime_settings.role.runs_panel:
         import dashboard
@@ -124,7 +143,8 @@ def create_app() -> FastAPI:
     )
     enable_settings = runtime_settings.role.runs_panel or runtime_settings.role.runs_scheduler
     enable_client_templates = runtime_settings.role.runs_panel or runtime_settings.role.runs_scheduler
-    _register_nats_handlers(enable_router, enable_settings, enable_client_templates)
+    ignore_host_messages = not runtime_settings.role.runs_panel
+    _register_nats_handlers(enable_router, enable_settings, enable_client_templates, ignore_host_messages)
     _register_scheduler_hooks()
     _register_jobs()
 

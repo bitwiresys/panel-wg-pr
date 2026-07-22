@@ -1,4 +1,4 @@
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { Button } from '@/components/ui/button'
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
@@ -210,7 +210,6 @@ export function XrayRoutingSection({ headerAddPulse, headerAddEpoch }: XrayRouti
   const [detailOpen, setDetailOpen] = useState(false)
   const [dialogMode, setDialogMode] = useState<DialogMode>('edit')
   const [draftRule, setDraftRule] = useState<RoutingRule | null>(null)
-  const [discardDraftOpen, setDiscardDraftOpen] = useState(false)
   const [blockAddWhileDraftOpen, setBlockAddWhileDraftOpen] = useState(false)
   const [ruleDialogIssues, setRuleDialogIssues] = useState<Issue[]>([])
   const routing = profile?.routing ?? defaultRouting()
@@ -261,6 +260,7 @@ export function XrayRoutingSection({ headerAddPulse, headerAddEpoch }: XrayRouti
 
   const routingCapsRef = useRef(routingCaps)
   routingCapsRef.current = routingCaps
+  const initialDraftRef = useRef<RoutingRule | null>(null)
 
   useEffect(() => {
     if (!detailOpen) return
@@ -287,6 +287,7 @@ export function XrayRoutingSection({ headerAddPulse, headerAddEpoch }: XrayRouti
       return
     }
     const nextRule = createDefaultRoutingRule({})
+    initialDraftRef.current = nextRule
     setDraftRule(nextRule)
     setDialogMode('add')
     setDetailOpen(true)
@@ -354,10 +355,6 @@ export function XrayRoutingSection({ headerAddPulse, headerAddEpoch }: XrayRouti
   const handleDetailOpenChange = (open: boolean) => {
     if (open) {
       setDetailOpen(true)
-      return
-    }
-    if (dialogMode === 'add' && draftRule !== null) {
-      setDiscardDraftOpen(true)
       return
     }
     finalizeDetailClose()
@@ -530,6 +527,11 @@ export function XrayRoutingSection({ headerAddPulse, headerAddEpoch }: XrayRouti
       <CoreEditorFormDialog
         isDialogOpen={detailOpen}
         onOpenChange={handleDetailOpenChange}
+        initialData={dialogMode === 'add' ? initialDraftRef.current : null}
+        getCurrentData={() => (dialogMode === 'add' ? draftRule : rule)}
+        discardTitle={dialogMode === 'add' ? t('coreEditor.routing.discardDraftTitle', { defaultValue: 'Discard new rule?' }) : t('coreEditor.routing.discardEditTitle', { defaultValue: 'Discard changes?' })}
+        discardDescription={dialogMode === 'add' ? t('coreEditor.routing.discardDraftDescription', { defaultValue: 'This rule is not in the list yet. Closing without adding will discard your changes.' }) : t('coreEditor.routing.discardDraftDescription', { defaultValue: 'Your modifications to this rule will be lost if you close now.' })}
+        discardActionLabel={t('coreEditor.routing.discardDraftAction', { defaultValue: 'Discard' })}
         leadingIcon={dialogMode === 'add' ? <Plus className="h-5 w-5 shrink-0" /> : <Pencil className="h-5 w-5 shrink-0" />}
         title={dialogMode === 'add' ? t('coreEditor.routing.dialogTitleAdd', { defaultValue: 'Add routing rule' }) : t('coreEditor.routing.dialogTitleEdit', { defaultValue: 'Edit routing rule' })}
         size="lg"
@@ -655,30 +657,7 @@ export function XrayRoutingSection({ headerAddPulse, headerAddEpoch }: XrayRouti
         )}
       </CoreEditorFormDialog>
 
-      <AlertDialog open={discardDraftOpen} onOpenChange={setDiscardDraftOpen}>
-        <AlertDialogContent dir={dir}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('coreEditor.routing.discardDraftTitle', { defaultValue: 'Discard new rule?' })}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('coreEditor.routing.discardDraftDescription', {
-                defaultValue: 'This rule is not in the list yet. Closing without adding will discard your changes.',
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setDiscardDraftOpen(false)
-                finalizeDetailClose()
-              }}
-            >
-              {t('coreEditor.routing.discardDraftAction', { defaultValue: 'Discard' })}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
+      
       <AlertDialog open={blockAddWhileDraftOpen} onOpenChange={setBlockAddWhileDraftOpen}>
         <AlertDialogContent dir={dir}>
           <AlertDialogHeader>

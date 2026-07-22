@@ -1,4 +1,4 @@
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { StringTagPicker } from '@/components/common/string-tag-picker'
 import { Button } from '@/components/ui/button'
 import { Form, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
@@ -251,7 +251,6 @@ export function XrayBalancersSection({ headerAddPulse, headerAddEpoch }: XrayBal
   const [detailOpen, setDetailOpen] = useState(false)
   const [dialogMode, setDialogMode] = useState<DialogMode>('edit')
   const [draftBalancer, setDraftBalancer] = useState<RoutingBalancer | null>(null)
-  const [discardDraftOpen, setDiscardDraftOpen] = useState(false)
   const [blockAddWhileDraftOpen, setBlockAddWhileDraftOpen] = useState(false)
   const [selectorCommitError, setSelectorCommitError] = useState<string | null>(null)
   const [observationTab, setObservationTab] = useState<ObservationTab>('observatory')
@@ -309,6 +308,7 @@ export function XrayBalancersSection({ headerAddPulse, headerAddEpoch }: XrayBal
 
   const profileRef = useRef(profile)
   profileRef.current = profile
+  const initialDraftRef = useRef<RoutingBalancer | null>(null)
 
   useEffect(() => {
     if (!detailOpen) return
@@ -333,8 +333,9 @@ export function XrayBalancersSection({ headerAddPulse, headerAddEpoch }: XrayBal
     const next = createDefaultRoutingBalancer({
       tag: `balancer-${(profile.routing?.balancers ?? []).length + 1}`,
     })
-    // Kit defaults selector to ["proxy-"]; editor starts with no outbound tags selected.
-    setDraftBalancer({ ...next, selector: [] })
+    const created = { ...next, selector: [] }
+    initialDraftRef.current = created
+    setDraftBalancer(created)
     setDialogMode('add')
     setDetailOpen(true)
   }, [profile, detailOpen, dialogMode, draftBalancer])
@@ -402,10 +403,6 @@ export function XrayBalancersSection({ headerAddPulse, headerAddEpoch }: XrayBal
   const handleDetailOpenChange = (open: boolean) => {
     if (open) {
       setDetailOpen(true)
-      return
-    }
-    if (dialogMode === 'add' && draftBalancer !== null) {
-      setDiscardDraftOpen(true)
       return
     }
     finalizeDetailClose()
@@ -652,6 +649,11 @@ export function XrayBalancersSection({ headerAddPulse, headerAddEpoch }: XrayBal
       <CoreEditorFormDialog
         isDialogOpen={detailOpen}
         onOpenChange={handleDetailOpenChange}
+        initialData={dialogMode === 'add' ? initialDraftRef.current : null}
+        getCurrentData={() => (dialogMode === 'add' ? draftBalancer : b)}
+        discardTitle={dialogMode === 'add' ? t('coreEditor.balancer.discardDraftTitle', { defaultValue: 'Discard new balancer?' }) : t('coreEditor.balancer.discardDraftTitle', { defaultValue: 'Discard changes?' })}
+        discardDescription={dialogMode === 'add' ? t('coreEditor.balancer.discardDraftDescription', { defaultValue: 'This balancer is not in the list yet. Closing without adding will discard your changes.' }) : t('coreEditor.balancer.discardDraftDescription', { defaultValue: 'Your modifications to this balancer will be lost if you close now.' })}
+        discardActionLabel={t('coreEditor.balancer.discardDraftAction', { defaultValue: 'Discard' })}
         leadingIcon={dialogMode === 'add' ? <Plus className="h-5 w-5 shrink-0" /> : <Pencil className="h-5 w-5 shrink-0" />}
         title={dialogMode === 'add' ? t('coreEditor.balancer.dialogTitleAdd', { defaultValue: 'Add balancer' }) : t('coreEditor.balancer.dialogTitleEdit', { defaultValue: 'Edit balancer' })}
         size="md"
@@ -1055,30 +1057,7 @@ export function XrayBalancersSection({ headerAddPulse, headerAddEpoch }: XrayBal
         )}
       </CoreEditorFormDialog>
 
-      <AlertDialog open={discardDraftOpen} onOpenChange={setDiscardDraftOpen}>
-        <AlertDialogContent dir={dir}>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('coreEditor.balancer.discardDraftTitle', { defaultValue: 'Discard new balancer?' })}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t('coreEditor.balancer.discardDraftDescription', {
-                defaultValue: 'This balancer is not in the list yet. Closing without adding will discard your changes.',
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                setDiscardDraftOpen(false)
-                finalizeDetailClose()
-              }}
-            >
-              {t('coreEditor.balancer.discardDraftAction', { defaultValue: 'Discard' })}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
+      
       <AlertDialog open={blockAddWhileDraftOpen} onOpenChange={setBlockAddWhileDraftOpen}>
         <AlertDialogContent dir={dir}>
           <AlertDialogHeader>

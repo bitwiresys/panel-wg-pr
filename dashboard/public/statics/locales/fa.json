@@ -63,6 +63,7 @@
         "usageLimitWarning": "هشدار محدودیت مصرف",
         "modifyHosts": "ویرایش هاست‌ها",
         "connect": "اتصال",
+        "recovered": "بازیابی",
         "error": "خطا",
         "limited": "محدود شده",
         "statusChange": "تغییر وضعیت",
@@ -144,6 +145,14 @@
         "headerName": "نام هدر",
         "headerValue": "مقدار هدر",
         "noHeaders": "هیچ هدر پاسخی پیکربندی نشده است. هدرها را اضافه کنید تا هدرهای HTTP سفارشی در پاسخ‌های اشتراک قرار گیرند."
+      },
+      "customVariables": {
+        "title": "متغیرهای سفارشی",
+        "description": "جای‌نگهدارهای قابل استفاده مجدد برای خروجی اشتراک و هاست بسازید.",
+        "addVariable": "افزودن متغیر",
+        "empty": "هیچ متغیر سفارشی پیکربندی نشده است.",
+        "duplicateKey": "کلید متغیر سفارشی تکراری است.",
+        "builtinConflict": "این کلید برای یک متغیر داخلی رزرو شده است."
       },
       "rules": {
         "title": "قوانین اشتراک",
@@ -472,7 +481,9 @@
   "saving": "در حال ذخیره...",
   "general": "عمومی",
   "loading": "در حال بارگذاری...",
+  "clear": "پاک کردن",
   "never": "هرگز",
+  "resources": "منابع",
   "noResults": "نتیجه‌ای یافت نشد",
   "noAdminsFound": "مدیری یافت نشد",
   "emptyState": {
@@ -569,6 +580,14 @@
     "subDomain": "دامنه اشتراک",
     "profile": "عنوان پروفایل",
     "subTemplate": "مسیر قالب اشتراک",
+    "customVariables": {
+      "title": "متغیرهای سفارشی",
+      "description": "متغیرهای سفارشی سراسری را برای کاربران این ادمین بازنویسی کنید.",
+      "addVariable": "افزودن متغیر",
+      "empty": "هیچ متغیر سفارشی پیکربندی نشده است.",
+      "duplicateKey": "کلید متغیر سفارشی تکراری است.",
+      "builtinConflict": "این کلید برای یک متغیر داخلی رزرو شده است."
+    },
     "passwordConfirm": "تأیید رمز عبور",
     "enterPasswordConfirm": "رمز عبور را دوباره وارد کنید",
     "disableSuccess": "مدیر «{{name}}» با موفقیت غیرفعال شد",
@@ -594,7 +613,54 @@
     "monitor": {
       "traffic": "نظارت بر مصرف ترافیک مدیر در طول زمان",
       "no_traffic": "داده‌ای برای ترافیک موجود نیست"
-    }
+    },
+    "disabled": "???????"
+  },
+  "apiKeys": {
+    "title": "کلیدهای API",
+    "description": "مدیریت کلیدهای API برای دسترسی برنامه‌نویسی",
+    "createKey": "ایجاد کلید API",
+    "editKey": "ویرایش کلید API",
+    "admin": "مدیر",
+    "selectAdmin": "انتخاب مدیر",
+    "adminDescription": "این کلید با هویت این مدیر احراز هویت می‌شود.",
+    "name": "نام",
+    "key": "کلید API",
+    "keyId": "شناسه کلید",
+    "note": "یادداشت",
+    "role": "نقش",
+    "status": "وضعیت",
+    "expireDate": "تاریخ انقضا",
+    "createdAt": "تاریخ ایجاد",
+    "revokedAt": "تاریخ ابطال",
+    "revoke": "ابطال",
+    "delete": "حذف",
+    "apiKey": "کلید API",
+    "apiKeyCopy": "کپی کلید API",
+    "apiKeyCopySuccess": "کلید API در حافظه کپی شد",
+    "apiKeyShowWarning": "این کلید فقط یکبار نمایش داده می‌شود. لطفا همین الان آن را کپی کنید.",
+    "createSuccess": "کلید API با موفقیت ایجاد شد",
+    "createFailed": "ایجاد کلید API ناموفق بود",
+    "updateSuccess": "کلید API با موفقیت بروزرسانی شد",
+    "updateFailed": "بروزرسانی کلید API ناموفق بود",
+    "revokeSuccess": "کلید API با موفقیت ابطال و مجدداً صادر شد",
+    "revokeFailed": "ابطال کلید API ناموفق بود",
+    "deleteSuccess": "کلید API با موفقیت حذف شد",
+    "deleteFailed": "حذف کلید API ناموفق بود",
+    "deletePrompt": "آیا از حذف کلید API «{{name}}» اطمینان دارید؟",
+    "revokePrompt": "ابطال کلید باعث غیرفعال شدن کلید فعلی و صدور کلید جدید می‌شود. آیا مطمئن هستید؟",
+    "revokeTitle": "ابطال و صدور مجدد کلید API",
+    "deleteTitle": "حذف کلید API",
+    "inheritPermissions": "ارث‌بری مجوزهای مدیر",
+    "inheritPermissionsDescription": "از مجوزهای فعلی نقش مدیر مالک استفاده شود. برای ذخیره مجوزهای سفارشی روی این کلید غیرفعال کنید.",
+    "inherited": "ارث‌بری‌شده",
+    "noKeys": "هیچ کلید API تنظیم نشده است",
+    "noKeysDescription": "برای دسترسی برنامه‌نویسی یک کلید API ایجاد کنید.",
+    "noSearchResults": "هیچ کلید API با معیارهای جست‌وجوی شما مطابقت ندارد. عبارت جست‌وجو یا فیلترها را تغییر دهید.",
+    "bulkDeleteSuccess": "{{count}} کلید API با موفقیت حذف شد.",
+    "bulkDeleteFailed": "حذف کلیدهای API انتخاب‌شده ناموفق بود.",
+    "bulkDeleteTitle": "حذف کلیدهای API انتخاب‌شده",
+    "bulkDeletePrompt": "آیا از حذف {{count}} کلید API انتخاب‌شده مطمئن هستید؟ این عملیات قابل بازگشت نیست."
   },
   "adminRoles": {
     "title": "نقش‌های مدیر",
@@ -615,7 +681,7 @@
     "limits": "محدودیت‌ها",
     "limitsAndFeatures": "محدودیت‌ها و قابلیت‌ها",
     "limitsHint": "برای استفاده از پیش‌فرض، خالی بگذارید. برای غیرفعال‌سازی ۰ بگذارید.",
-    "roleFormHint": "اعمال کاربر دارای محدوده، مقدار «هیچ»، «خودی» یا «همه» می‌گیرند. سایر اعمال سوئیچ بولی هستند.",
+    "roleFormHint": "اعمال دارای محدوده، مقدار «هیچ»، «خودی» یا «همه» می‌گیرند. سایر اعمال سوئیچ بولی هستند.",
     "scopedActionInfo": "محدوده مالکیت را انتخاب کنید: «هیچ» دسترسی را رد می‌کند، «خودی» فقط کاربران خود مدیر را شامل می‌شود و «همه» دسترسی کامل می‌دهد.",
     "allowAll": "اجازه همه",
     "features": "قابلیت‌ها",
@@ -661,6 +727,7 @@
       "users": "کاربران",
       "admins": "مدیران",
       "roles": "نقش‌ها",
+      "apiKeys": "کلیدهای API",
       "nodes": "گره‌ها",
       "coreHosts": "هسته و هاست‌ها",
       "groupsTemplates": "گروه‌ها و قالب‌ها",
@@ -716,6 +783,7 @@
       "users": "کاربران",
       "admins": "مدیران",
       "admin_roles": "نقش‌ها",
+      "api_keys": "کلیدهای API",
       "nodes": "گره‌ها",
       "cores": "هسته‌ها",
       "hosts": "هاست‌ها",
@@ -726,6 +794,7 @@
       "system": "سیستم",
       "hwids": "HWID"
     },
+    "noAvailablePermissions": "هیچ مجوزی در دسترس نیست.",
     "scopedBadge": "محدوده‌دار",
     "scopes": {
       "none": "هیچ",
@@ -742,8 +811,7 @@
       "max_hwid_per_user": "حداکثر HWID برای هر کاربر",
       "on_hold_timeout_days_min": "حداقل زمان انتظار (روز)",
       "on_hold_timeout_days_max": "حداکثر زمان انتظار (روز)"
-      },
-
+    },
     "limitedBehavior": {
       "disabledWhenLimited": {
         "title": "مسدود کردن مدیران محدودشده",
@@ -841,6 +909,7 @@
     "dataLimit": "محدودیت داده",
     "hwidLimit": "محدودیت شناسه سخت‌افزار",
     "hwidLimitPlaceholder": "خالی = پیش‌فرض، ۰ = نامحدود",
+    "hwidLimitHint": "خالی = استفاده از سیاست پیش‌فرض. ۰ = نامحدود و معاف از شناسه سخت‌افزار، حتی زمانی که هدر شناسه سخت‌افزار الزامی شده باشد.",
     "expire": "مدت انقضا",
     "onHoldTimeout": "زمان انتظار توقف",
     "method": "روش",
@@ -1174,6 +1243,19 @@
       "randRange": "محدوده تصادفی",
       "randRangePlaceholder": "محدوده تصادفی را وارد کنید (مثلاً 10-20)"
     },
+    "finalmask": {
+      "title": "تنظیمات FinalMask",
+      "enable": "فعال‌سازی FinalMask",
+      "info": "پیکربندی تنظیمات کلاینت سفارشی finalmask (پارامترهای TCP، UDP و QUIC).",
+      "placeholder": "پیکربندی JSON برای FinalMask را وارد کنید",
+      "invalidJson": "JSON نامعتبر است: {{error}}",
+      "tcpLayers": "لایه‌های TCP",
+      "addTcpLayer": "افزودن لایه TCP",
+      "noTcpLayers": "هیچ لایه TCP پیکربندی نشده است",
+      "udpLayers": "لایه‌های UDP",
+      "addUdpLayer": "افزودن لایه UDP",
+      "noUdpLayers": "هیچ لایه UDP پیکربندی نشده است"
+    },
     "muxSettings": "تنظیمات Mux",
     "enableMux": "فعال‌سازی Mux",
     "xraySettings": "تنظیمات Xray",
@@ -1219,6 +1301,13 @@
       "url": "آدرس اشتراک",
       "format": "فرمت اشتراک منطبق‌شده (مثلاً links یا sing_box)",
       "admin_username": "نام کاربری ادمین"
+    },
+    "customVariables": {
+      "title": "متغیرهای سفارشی",
+      "trigger": "متغیرهای سفارشی",
+      "preview": "پیش‌نمایش",
+      "empty": "هیچ متغیر سفارشی پیکربندی نشده است.",
+      "emptyValue": "مقدار خالی"
     },
     "advancedOptions": "تنظیمات پیشرفته",
     "host.info": "به طور پیش‌فرض، اگر هاست درخواست در پیکربندی XRAY تنظیم شده باشد، از آن استفاده می‌شود. با این حال، در صورت نیاز، می‌توانید یک هاست درخواست سفارشی در اینجا تنظیم کنید.",
@@ -2059,7 +2148,8 @@
     "shadowsocksPasswordGenerated": "رمز عبور با موفقیت تولید شد",
     "shadowsocksPasswordGenerationFailed": "تولید رمز عبور ناموفق بود",
     "discardChangesTitle": "لغو تغییرات؟",
-    "discardChangesDescription": "اگر این ویرایشگر را ببندید، تغییرات ذخیره‌نشدهٔ پیکربندی هسته از بین خواهد رفت."
+    "discardChangesDescription": "اگر این ویرایشگر را ببندید، تغییرات ذخیره‌نشدهٔ پیکربندی هسته از بین خواهد رفت.",
+    "scanRealityTarget": "اسکن هدف"
   },
   "coreEditor": {
     "nameRequired": "نام الزامی است",
@@ -2861,6 +2951,41 @@
     "bulkRemove": {
       "title": "حذف موارد انتخاب‌شده",
       "description": "{{count}} مورد انتخاب‌شده حذف شود؟ از پیکربندی حذف خواهند شد."
+    },
+    "realityScan": {
+      "title": "اسکن هدف Reality",
+      "description": "یک یا چند هدف را بررسی کنید تا مطمئن شوید به عنوان استتار REALITY کار می‌کنند. REALITY به HTTP/2 و TLS 1.3 نیاز دارد.",
+      "targets": "هدف‌ها",
+      "maxTargets": "حداکثر {{max}} هدف قابل اسکن است.",
+      "timeout": "مهلت (ثانیه)",
+      "scan": "اسکن",
+      "stop": "توقف",
+      "empty": "یک یا چند هدف وارد کنید و اسکن را اجرا کنید.",
+      "loading": "در حال اسکن هدف...",
+      "summary": "{{feasible}} / {{total}} مناسب",
+      "suitableOnly": "فقط موارد مناسب",
+      "removeTarget": "حذف {{tag}}",
+      "scanningShort": "در حال اسکن",
+      "scanFailed": "ناموفق",
+      "errorDescription": "اسکن این هدف امکان‌پذیر نیست.",
+      "feasible": "هدف مناسب Reality",
+      "notFeasible": "هدف نامناسب برای Reality",
+      "tls13": "TLS 1.3",
+      "h2": "HTTP/2 (ALPN)",
+      "keyExchange": "تبادل کلید X25519",
+      "postQuantum": "پساکوانتومی (X25519MLKEM768)",
+      "h3": "HTTP/3 (اعلام‌شده)",
+      "advertised": "Alt-Svc",
+      "notAdvertised": "اعلام‌نشده",
+      "supported": "پشتیبانی می‌شود",
+      "certificate": "گواهی معتبر",
+      "subject": "موضوع",
+      "expires": "انقضا",
+      "serverNames": "نام‌های سرور گواهی (SNIهای معتبر)",
+      "unknown": "نامشخص",
+      "other": "سایر",
+      "sniLabel": "SNI",
+      "sniDiscovered": "کشف‌شده از IP"
     }
   },
   "settings.cores.title": "هسته‌ها",
@@ -3284,6 +3409,7 @@
   "timeSelector.pickDate": "انتخاب تاریخ",
   "advanceSearch": {
     "title": "جستجوی پیشرفته",
+    "description": "فیلتر کردن کلیدهای API بر اساس شناسه و وضعیت.",
     "searchMode": "حالت جست‌وجو",
     "searchModeDescription": "مشخص کنید فیلد جست‌وجوی اصلی چگونه تفسیر شود.",
     "byUsername": "نام کاربری و یادداشت‌ها",
