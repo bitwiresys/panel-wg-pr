@@ -498,6 +498,10 @@ export type XHttpSettingsSeqKey = string | null
 
 export type XHttpSettingsSeqPlacement = string | null
 
+export type XHttpSettingsSessionIdLength = string | null
+
+export type XHttpSettingsSessionIdTable = string | null
+
 export type XHttpSettingsSessionKey = string | null
 
 export type XHttpSettingsSessionPlacement = string | null
@@ -518,18 +522,6 @@ export type XHttpSettingsXPaddingBytes = string | null
 
 export type XHttpSettingsNoGrpcHeader = boolean | null
 
-export type XHttpModes = (typeof XHttpModes)[keyof typeof XHttpModes]
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const XHttpModes = {
-  auto: 'auto',
-  'packet-up': 'packet-up',
-  'stream-up': 'stream-up',
-  'stream-one': 'stream-one',
-} as const
-
-export type XHttpSettingsMode = XHttpModes | null
-
 export interface XHttpSettings {
   mode?: XHttpSettingsMode
   no_grpc_header?: XHttpSettingsNoGrpcHeader
@@ -542,6 +534,8 @@ export interface XHttpSettings {
   uplink_http_method?: XHttpSettingsUplinkHttpMethod
   session_placement?: XHttpSettingsSessionPlacement
   session_key?: XHttpSettingsSessionKey
+  session_id_table?: XHttpSettingsSessionIdTable
+  session_id_length?: XHttpSettingsSessionIdLength
   seq_placement?: XHttpSettingsSeqPlacement
   seq_key?: XHttpSettingsSeqKey
   uplink_data_placement?: XHttpSettingsUplinkDataPlacement
@@ -551,6 +545,23 @@ export interface XHttpSettings {
   sc_min_posts_interval_ms?: XHttpSettingsScMinPostsIntervalMs
   xmux?: XHttpSettingsXmux
   download_settings?: XHttpSettingsDownloadSettings
+}
+
+export type XHttpModes = (typeof XHttpModes)[keyof typeof XHttpModes]
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const XHttpModes = {
+  auto: 'auto',
+  'packet-up': 'packet-up',
+  'stream-up': 'stream-up',
+  'stream-one': 'stream-one',
+} as const
+
+export type XHttpSettingsMode = XHttpModes | null
+
+export interface WorkersHealth {
+  scheduler: WorkerHealth
+  node: WorkerHealth
 }
 
 export type WorkerHealthError = string | null
@@ -563,9 +574,13 @@ export interface WorkerHealth {
   error?: WorkerHealthError
 }
 
-export interface WorkersHealth {
-  scheduler: WorkerHealth
-  node: WorkerHealth
+export interface WireGuardSubnetUsage {
+  subnet: string
+  interface_tags: string[]
+  capacity: number
+  used: number
+  free: number
+  free_ips: string[]
 }
 
 export type WireGuardSettingsPublicKey = string | null
@@ -576,15 +591,6 @@ export interface WireGuardSettings {
   private_key?: WireGuardSettingsPrivateKey
   public_key?: WireGuardSettingsPublicKey
   peer_ips?: string[]
-}
-
-export interface WireGuardPeerIPsReallocateResponse {
-  wireguard_inbound_tags: number
-  candidates: number
-  updated: number
-  dry_run: boolean
-  sample_usernames: string[]
-  affected_users: number
 }
 
 export type WireGuardHostOverridesDns = string[] | null
@@ -1692,6 +1698,71 @@ export interface RemoveAPIKeysResponse {
   count: number
 }
 
+export type RealityScanResultReason = string | null
+
+export type RealityScanResultLatencyMs = number | null
+
+export type RealityScanResultNotAfter = string | null
+
+export type RealityScanResultCertIssuer = string | null
+
+export type RealityScanResultCertSubject = string | null
+
+export type RealityScanResultCurve = string | null
+
+export type RealityScanResultPostQuantum = boolean | null
+
+export type RealityScanResultX25519 = boolean | null
+
+export type RealityScanResultAlpn = string | null
+
+export type RealityScanResultTlsVersion = string | null
+
+export type RealityScanResultSni = string | null
+
+export type RealityScanResultIp = string | null
+
+export interface RealityScanResult {
+  target: string
+  host: string
+  ip?: RealityScanResultIp
+  port: number
+  sni?: RealityScanResultSni
+  sni_discovered?: boolean
+  feasible: boolean
+  tls13: boolean
+  tls_version?: RealityScanResultTlsVersion
+  h2: boolean
+  alpn?: RealityScanResultAlpn
+  x25519?: RealityScanResultX25519
+  post_quantum?: RealityScanResultPostQuantum
+  curve?: RealityScanResultCurve
+  h3?: boolean
+  cert_valid: boolean
+  cert_subject?: RealityScanResultCertSubject
+  cert_issuer?: RealityScanResultCertIssuer
+  not_after?: RealityScanResultNotAfter
+  server_names?: string[]
+  latency_ms?: RealityScanResultLatencyMs
+  reason?: RealityScanResultReason
+}
+
+/**
+ * Per-probe timeout in seconds (1-20, default 10)
+ */
+export type RealityScanRequestTimeout = number | null
+
+export interface RealityScanRequest {
+  /**
+   * host or host:port to probe (port defaults to 443)
+   * @minLength 1
+   * @maxLength 253
+   */
+  target: string
+  /** Per-probe timeout in seconds (1-20, default 10) */
+  timeout?: RealityScanRequestTimeout
+}
+
 export interface ProxyTable {
   vmess?: VMessSettings
   vless?: VlessSettings
@@ -1826,21 +1897,6 @@ export interface NotificationEnable {
   percentage_reached?: boolean
 }
 
-/**
- * Per-object notification channels
- */
-export interface NotificationChannels {
-  admin?: NotificationChannel
-  admin_role?: NotificationChannel
-  core?: NotificationChannel
-  group?: NotificationChannel
-  host?: NotificationChannel
-  node?: NotificationChannel
-  user?: NotificationChannel
-  user_template?: NotificationChannel
-  api_key?: NotificationChannel
-}
-
 export type NotificationChannelDiscordWebhookUrl = string | null
 
 export type NotificationChannelTelegramTopicId = number | null
@@ -1854,6 +1910,21 @@ export interface NotificationChannel {
   telegram_chat_id?: NotificationChannelTelegramChatId
   telegram_topic_id?: NotificationChannelTelegramTopicId
   discord_webhook_url?: NotificationChannelDiscordWebhookUrl
+}
+
+/**
+ * Per-object notification channels
+ */
+export interface NotificationChannels {
+  admin?: NotificationChannel
+  admin_role?: NotificationChannel
+  core?: NotificationChannel
+  group?: NotificationChannel
+  host?: NotificationChannel
+  node?: NotificationChannel
+  user?: NotificationChannel
+  user_template?: NotificationChannel
+  api_key?: NotificationChannel
 }
 
 export interface NotFound {
@@ -1882,6 +1953,18 @@ export interface NodesResponse {
 export type NodesPermissionsStatsAnyOf = { [key: string]: PermissionScope | number }
 
 export type NodesPermissionsStats = boolean | NodesPermissionsStatsAnyOf | null
+
+export interface NodesPermissions {
+  create?: NodesPermissionsCreate
+  read?: NodesPermissionsRead
+  read_simple?: NodesPermissionsReadSimple
+  update?: NodesPermissionsUpdate
+  delete?: NodesPermissionsDelete
+  reconnect?: NodesPermissionsReconnect
+  update_core?: NodesPermissionsUpdateCore
+  logs?: NodesPermissionsLogs
+  stats?: NodesPermissionsStats
+}
 
 export type NodesPermissionsLogsAnyOf = { [key: string]: PermissionScope | number }
 
@@ -1915,19 +1998,14 @@ export type NodesPermissionsCreateAnyOf = { [key: string]: PermissionScope | num
 
 export type NodesPermissionsCreate = boolean | NodesPermissionsCreateAnyOf | null
 
-export interface NodesPermissions {
-  create?: NodesPermissionsCreate
-  read?: NodesPermissionsRead
-  read_simple?: NodesPermissionsReadSimple
-  update?: NodesPermissionsUpdate
-  delete?: NodesPermissionsDelete
-  reconnect?: NodesPermissionsReconnect
-  update_core?: NodesPermissionsUpdateCore
-  logs?: NodesPermissionsLogs
-  stats?: NodesPermissionsStats
-}
-
 export type NodeUsageStatsListPeriod = Period | null
+
+export interface NodeUsageStatsList {
+  period?: NodeUsageStatsListPeriod
+  start: string
+  end: string
+  stats: NodeUsageStatsListStats
+}
 
 export interface NodeUsageStat {
   uplink: number
@@ -1936,13 +2014,6 @@ export interface NodeUsageStat {
 }
 
 export type NodeUsageStatsListStats = { [key: string]: NodeUsageStat[] }
-
-export interface NodeUsageStatsList {
-  period?: NodeUsageStatsListPeriod
-  start: string
-  end: string
-  stats: NodeUsageStatsListStats
-}
 
 export type NodeStatus = (typeof NodeStatus)[keyof typeof NodeStatus]
 
@@ -2292,12 +2363,6 @@ export type HostsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | num
 
 export type HostsPermissionsUpdate = boolean | HostsPermissionsUpdateAnyOf | null
 
-export interface HostsPermissions {
-  create?: HostsPermissionsCreate
-  read?: HostsPermissionsRead
-  update?: HostsPermissionsUpdate
-}
-
 export type HostsPermissionsReadAnyOf = { [key: string]: PermissionScope | number }
 
 export type HostsPermissionsRead = boolean | HostsPermissionsReadAnyOf | null
@@ -2305,6 +2370,12 @@ export type HostsPermissionsRead = boolean | HostsPermissionsReadAnyOf | null
 export type HostsPermissionsCreateAnyOf = { [key: string]: PermissionScope | number }
 
 export type HostsPermissionsCreate = boolean | HostsPermissionsCreateAnyOf | null
+
+export interface HostsPermissions {
+  create?: HostsPermissionsCreate
+  read?: HostsPermissionsRead
+  update?: HostsPermissionsUpdate
+}
 
 export interface HostNotificationEnable {
   create?: boolean
@@ -2371,6 +2442,11 @@ export interface HTTPException {
   detail: string
 }
 
+export interface GroupsResponse {
+  groups: GroupResponse[]
+  total: number
+}
+
 /**
  * Lightweight group model with only id and name for performance.
  */
@@ -2399,11 +2475,6 @@ export interface GroupResponse {
   is_disabled?: boolean
   id: number
   total_users?: number
-}
-
-export interface GroupsResponse {
-  groups: GroupResponse[]
-  total: number
 }
 
 export type GroupModifyInboundTags = string[] | null
@@ -2513,13 +2584,7 @@ export const FinalMaskUdpType = {
 export type FinalMaskUdpLayerSettingsAnyOf = { [key: string]: unknown }
 
 export type FinalMaskUdpLayerSettings =
-  | FinalMaskUdpHeaderCustomSettings
-  | FinalMaskPasswordSettings
-  | FinalMaskSudokuSettings
-  | FinalMaskDomainSettings
-  | FinalMaskXicmpSettings
-  | FinalMaskNoiseSettings
-  | FinalMaskUdpLayerSettingsAnyOf
+  FinalMaskUdpHeaderCustomSettings | FinalMaskPasswordSettings | FinalMaskSudokuSettings | FinalMaskDomainSettings | FinalMaskXicmpSettings | FinalMaskNoiseSettings | FinalMaskUdpLayerSettingsAnyOf
 
 export interface FinalMaskUdpLayer {
   type: FinalMaskUdpType
@@ -2554,11 +2619,12 @@ export const FinalMaskTcpType = {
   'header-custom': 'header-custom',
   fragment: 'fragment',
   sudoku: 'sudoku',
+  xmc: 'xmc',
 } as const
 
 export type FinalMaskTcpLayerOutputSettingsAnyOf = { [key: string]: unknown }
 
-export type FinalMaskTcpLayerOutputSettings = FinalMaskTcpHeaderCustomSettings | XrayFragmentSettingsOutput | FinalMaskSudokuSettings | FinalMaskTcpLayerOutputSettingsAnyOf
+export type FinalMaskTcpLayerOutputSettings = FinalMaskTcpHeaderCustomSettings | XrayFragmentSettingsOutput | FinalMaskSudokuSettings | FinalMaskXmcSettings | FinalMaskTcpLayerOutputSettingsAnyOf
 
 export interface FinalMaskTcpLayerOutput {
   type: FinalMaskTcpType
@@ -2568,7 +2634,7 @@ export interface FinalMaskTcpLayerOutput {
 
 export type FinalMaskTcpLayerInputSettingsAnyOf = { [key: string]: unknown }
 
-export type FinalMaskTcpLayerInputSettings = FinalMaskTcpHeaderCustomSettings | XrayFragmentSettingsInput | FinalMaskSudokuSettings | FinalMaskTcpLayerInputSettingsAnyOf
+export type FinalMaskTcpLayerInputSettings = FinalMaskTcpHeaderCustomSettings | XrayFragmentSettingsInput | FinalMaskSudokuSettings | FinalMaskXmcSettings | FinalMaskTcpLayerInputSettingsAnyOf
 
 export interface FinalMaskTcpLayerInput {
   type: FinalMaskTcpType
@@ -2608,6 +2674,19 @@ export interface FinalMaskSudokuSettings {
   customTables?: FinalMaskSudokuSettingsCustomTables
   paddingMin?: FinalMaskSudokuSettingsPaddingMin
   paddingMax?: FinalMaskSudokuSettingsPaddingMax
+  [key: string]: unknown
+}
+
+export type FinalMaskXmcSettingsPassword = string | null
+
+export type FinalMaskXmcSettingsUsernames = string[] | null
+
+export type FinalMaskXmcSettingsHostname = string | null
+
+export interface FinalMaskXmcSettings {
+  hostname?: FinalMaskXmcSettingsHostname
+  usernames?: FinalMaskXmcSettingsUsernames
+  password?: FinalMaskXmcSettingsPassword
   [key: string]: unknown
 }
 
@@ -2788,26 +2867,6 @@ export type CreateHostMuxSettings = MuxSettingsInput | null
 
 export type CreateHostTransportSettings = TransportSettings | null
 
-export type CreateHostHttpHeadersAnyOf = { [key: string]: string }
-
-export type CreateHostHttpHeaders = CreateHostHttpHeadersAnyOf | null
-
-export type CreateHostAllowinsecure = boolean | null
-
-export type CreateHostAlpn = ProxyHostALPN[] | null
-
-export type CreateHostPath = string | null
-
-export type CreateHostHost = string[] | null
-
-export type CreateHostSni = string[] | null
-
-export type CreateHostPort = number | null
-
-export type CreateHostInboundTag = string | null
-
-export type CreateHostId = number | null
-
 export interface CreateHost {
   id?: CreateHostId
   remark: string
@@ -2841,6 +2900,34 @@ export interface CreateHost {
   final_mask_settings?: CreateHostFinalMaskSettings
 }
 
+export type CreateHostHttpHeadersAnyOf = { [key: string]: string }
+
+export type CreateHostHttpHeaders = CreateHostHttpHeadersAnyOf | null
+
+export type CreateHostAllowinsecure = boolean | null
+
+export type CreateHostAlpn = ProxyHostALPN[] | null
+
+export type CreateHostPath = string | null
+
+export type CreateHostHost = string[] | null
+
+export type CreateHostSni = string[] | null
+
+export type CreateHostPort = number | null
+
+export type CreateHostInboundTag = string | null
+
+export type CreateHostId = number | null
+
+/**
+ * Response model for lightweight core list.
+ */
+export interface CoresSimpleResponse {
+  cores: CoreSimple[]
+  total: number
+}
+
 export type CoreType = (typeof CoreType)[keyof typeof CoreType]
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
@@ -2860,14 +2947,6 @@ export interface CoreSimple {
   id: number
   name: string
   type?: CoreSimpleType
-}
-
-/**
- * Response model for lightweight core list.
- */
-export interface CoresSimpleResponse {
-  cores: CoreSimple[]
-  total: number
 }
 
 export interface CoreResponseList {
@@ -3007,6 +3086,14 @@ export type CRUDPermissionsDeleteAnyOf = { [key: string]: PermissionScope | numb
 
 export type CRUDPermissionsDelete = boolean | CRUDPermissionsDeleteAnyOf | null
 
+export type CRUDPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
+
+export type CRUDPermissionsUpdate = boolean | CRUDPermissionsUpdateAnyOf | null
+
+export type CRUDPermissionsReadSimpleAnyOf = { [key: string]: PermissionScope | number }
+
+export type CRUDPermissionsReadSimple = boolean | CRUDPermissionsReadSimpleAnyOf | null
+
 /**
  * Standard create/read/read_simple/update/delete permissions.
 Used directly by: groups, templates, client_templates, cores, admin_roles.
@@ -3020,14 +3107,6 @@ export interface CRUDPermissions {
   delete?: CRUDPermissionsDelete
 }
 
-export type CRUDPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
-
-export type CRUDPermissionsUpdate = boolean | CRUDPermissionsUpdateAnyOf | null
-
-export type CRUDPermissionsReadSimpleAnyOf = { [key: string]: PermissionScope | number }
-
-export type CRUDPermissionsReadSimple = boolean | CRUDPermissionsReadSimpleAnyOf | null
-
 export type CRUDPermissionsReadAnyOf = { [key: string]: PermissionScope | number }
 
 export type CRUDPermissionsRead = boolean | CRUDPermissionsReadAnyOf | null
@@ -3035,25 +3114,6 @@ export type CRUDPermissionsRead = boolean | CRUDPermissionsReadAnyOf | null
 export type CRUDPermissionsCreateAnyOf = { [key: string]: PermissionScope | number }
 
 export type CRUDPermissionsCreate = boolean | CRUDPermissionsCreateAnyOf | null
-
-export type BulkWireGuardPeerIPsExpireBefore = string | null
-
-export type BulkWireGuardPeerIPsExpireAfter = string | null
-
-/**
- * Re-seat WireGuard peer IPs (same scoping as BulkUser: users, admins, group_ids, status).
- */
-export interface BulkWireGuardPeerIPs {
-  dry_run?: boolean
-  group_ids?: number[]
-  admins?: number[]
-  users?: number[]
-  status?: UserStatus[]
-  expire_after?: BulkWireGuardPeerIPsExpireAfter
-  expire_before?: BulkWireGuardPeerIPsExpireBefore
-  confirm?: boolean
-  replace_all?: boolean
-}
 
 export interface BulkUsersSetOwner {
   ids?: number[]
@@ -3388,6 +3448,14 @@ export type AdminsPermissionsResetUsageAnyOf = { [key: string]: PermissionScope 
 
 export type AdminsPermissionsResetUsage = boolean | AdminsPermissionsResetUsageAnyOf | null
 
+export type AdminsPermissionsDeleteAnyOf = { [key: string]: PermissionScope | number }
+
+export type AdminsPermissionsDelete = boolean | AdminsPermissionsDeleteAnyOf | null
+
+export type AdminsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
+
+export type AdminsPermissionsUpdate = boolean | AdminsPermissionsUpdateAnyOf | null
+
 export interface AdminsPermissions {
   create?: AdminsPermissionsCreate
   read?: AdminsPermissionsRead
@@ -3396,14 +3464,6 @@ export interface AdminsPermissions {
   delete?: AdminsPermissionsDelete
   reset_usage?: AdminsPermissionsResetUsage
 }
-
-export type AdminsPermissionsDeleteAnyOf = { [key: string]: PermissionScope | number }
-
-export type AdminsPermissionsDelete = boolean | AdminsPermissionsDeleteAnyOf | null
-
-export type AdminsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
-
-export type AdminsPermissionsUpdate = boolean | AdminsPermissionsUpdateAnyOf | null
 
 export type AdminsPermissionsReadSimpleAnyOf = { [key: string]: PermissionScope | number }
 
@@ -6836,6 +6896,60 @@ export function useGetInboundDetails<TData = Awaited<ReturnType<typeof getInboun
 }
 
 /**
+ * Per-subnet WireGuard address usage: capacity, used/free counts and the first free IPs.
+ * @summary Get Wireguard Subnets
+ */
+export const getWireguardSubnets = (signal?: AbortSignal) => {
+  return orvalFetcher<WireGuardSubnetUsage[]>({ url: `/api/wireguard/subnets`, method: 'GET', signal })
+}
+
+export const getGetWireguardSubnetsQueryKey = () => {
+  return [`/api/wireguard/subnets`] as const
+}
+
+export const getGetWireguardSubnetsQueryOptions = <TData = Awaited<ReturnType<typeof getWireguardSubnets>>, TError = ErrorType<Unauthorized>>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>>
+}) => {
+  const { query: queryOptions } = options ?? {}
+
+  const queryKey = queryOptions?.queryKey ?? getGetWireguardSubnetsQueryKey()
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getWireguardSubnets>>> = ({ signal }) => getWireguardSubnets(signal)
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type GetWireguardSubnetsQueryResult = NonNullable<Awaited<ReturnType<typeof getWireguardSubnets>>>
+export type GetWireguardSubnetsQueryError = ErrorType<Unauthorized>
+
+export function useGetWireguardSubnets<TData = Awaited<ReturnType<typeof getWireguardSubnets>>, TError = ErrorType<Unauthorized>>(options: {
+  query: Partial<UseQueryOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>> &
+    Pick<DefinedInitialDataOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>, 'initialData'>
+}): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetWireguardSubnets<TData = Awaited<ReturnType<typeof getWireguardSubnets>>, TError = ErrorType<Unauthorized>>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>> &
+    Pick<UndefinedInitialDataOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>, 'initialData'>
+}): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useGetWireguardSubnets<TData = Awaited<ReturnType<typeof getWireguardSubnets>>, TError = ErrorType<Unauthorized>>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>>
+}): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Get Wireguard Subnets
+ */
+
+export function useGetWireguardSubnets<TData = Awaited<ReturnType<typeof getWireguardSubnets>>, TError = ErrorType<Unauthorized>>(options?: {
+  query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof getWireguardSubnets>>, TError, TData>>
+}): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getGetWireguardSubnetsQueryOptions(options)
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+
+  query.queryKey = queryOptions.queryKey
+
+  return query
+}
+
+/**
  * @summary Get Workers Health
  */
 export const getWorkersHealth = (signal?: AbortSignal) => {
@@ -7659,6 +7773,51 @@ export const useCreateCoreConfig = <TData = Awaited<ReturnType<typeof createCore
   mutation?: UseMutationOptions<TData, TError, { data: BodyType<CoreCreate> }, TContext>
 }): UseMutationResult<TData, TError, { data: BodyType<CoreCreate> }, TContext> => {
   const mutationOptions = getCreateCoreConfigMutationOptions(options)
+
+  return useMutation(mutationOptions)
+}
+
+/**
+ * @summary Scan Reality Target
+ */
+export const scanRealityTarget = (realityScanRequest: BodyType<RealityScanRequest>, signal?: AbortSignal) => {
+  return orvalFetcher<RealityScanResult>({ url: `/api/core/reality-scan`, method: 'POST', headers: { 'Content-Type': 'application/json' }, data: realityScanRequest, signal })
+}
+
+export const getScanRealityTargetMutationOptions = <
+  TData = Awaited<ReturnType<typeof scanRealityTarget>>,
+  TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<TData, TError, { data: BodyType<RealityScanRequest> }, TContext>
+}) => {
+  const mutationKey = ['scanRealityTarget']
+  const { mutation: mutationOptions } = options
+    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey } }
+
+  const mutationFn: MutationFunction<Awaited<ReturnType<typeof scanRealityTarget>>, { data: BodyType<RealityScanRequest> }> = props => {
+    const { data } = props ?? {}
+
+    return scanRealityTarget(data)
+  }
+
+  return { mutationFn, ...mutationOptions } as UseMutationOptions<TData, TError, { data: BodyType<RealityScanRequest> }, TContext>
+}
+
+export type ScanRealityTargetMutationResult = NonNullable<Awaited<ReturnType<typeof scanRealityTarget>>>
+export type ScanRealityTargetMutationBody = BodyType<RealityScanRequest>
+export type ScanRealityTargetMutationError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>
+
+/**
+ * @summary Scan Reality Target
+ */
+export const useScanRealityTarget = <TData = Awaited<ReturnType<typeof scanRealityTarget>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>, TContext = unknown>(options?: {
+  mutation?: UseMutationOptions<TData, TError, { data: BodyType<RealityScanRequest> }, TContext>
+}): UseMutationResult<TData, TError, { data: BodyType<RealityScanRequest> }, TContext> => {
+  const mutationOptions = getScanRealityTargetMutationOptions(options)
 
   return useMutation(mutationOptions)
 }
@@ -13477,62 +13636,6 @@ export const useBulkModifyUsersProxySettings = <
   mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkUsersProxy> }, TContext>
 }): UseMutationResult<TData, TError, { data: BodyType<BulkUsersProxy> }, TContext> => {
   const mutationOptions = getBulkModifyUsersProxySettingsMutationOptions(options)
-
-  return useMutation(mutationOptions)
-}
-
-/**
- * Same scoping as other bulk user actions (users, admins, group_ids, optional status filter). non-owner admins only affect their own users.
- * @summary Bulk reallocate WireGuard peer IPs
- */
-export const bulkReallocateWireguardPeerIps = (bulkWireGuardPeerIPs: BodyType<BulkWireGuardPeerIPs>, signal?: AbortSignal) => {
-  return orvalFetcher<WireGuardPeerIPsReallocateResponse>({
-    url: `/api/users/bulk/wireguard/reallocate-peer-ips`,
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    data: bulkWireGuardPeerIPs,
-    signal,
-  })
-}
-
-export const getBulkReallocateWireguardPeerIpsMutationOptions = <
-  TData = Awaited<ReturnType<typeof bulkReallocateWireguardPeerIps>>,
-  TError = ErrorType<Unauthorized | HTTPValidationError>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkWireGuardPeerIPs> }, TContext>
-}) => {
-  const mutationKey = ['bulkReallocateWireguardPeerIps']
-  const { mutation: mutationOptions } = options
-    ? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
-      ? options
-      : { ...options, mutation: { ...options.mutation, mutationKey } }
-    : { mutation: { mutationKey } }
-
-  const mutationFn: MutationFunction<Awaited<ReturnType<typeof bulkReallocateWireguardPeerIps>>, { data: BodyType<BulkWireGuardPeerIPs> }> = props => {
-    const { data } = props ?? {}
-
-    return bulkReallocateWireguardPeerIps(data)
-  }
-
-  return { mutationFn, ...mutationOptions } as UseMutationOptions<TData, TError, { data: BodyType<BulkWireGuardPeerIPs> }, TContext>
-}
-
-export type BulkReallocateWireguardPeerIpsMutationResult = NonNullable<Awaited<ReturnType<typeof bulkReallocateWireguardPeerIps>>>
-export type BulkReallocateWireguardPeerIpsMutationBody = BodyType<BulkWireGuardPeerIPs>
-export type BulkReallocateWireguardPeerIpsMutationError = ErrorType<Unauthorized | HTTPValidationError>
-
-/**
- * @summary Bulk reallocate WireGuard peer IPs
- */
-export const useBulkReallocateWireguardPeerIps = <
-  TData = Awaited<ReturnType<typeof bulkReallocateWireguardPeerIps>>,
-  TError = ErrorType<Unauthorized | HTTPValidationError>,
-  TContext = unknown,
->(options?: {
-  mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkWireGuardPeerIPs> }, TContext>
-}): UseMutationResult<TData, TError, { data: BodyType<BulkWireGuardPeerIPs> }, TContext> => {
-  const mutationOptions = getBulkReallocateWireguardPeerIpsMutationOptions(options)
 
   return useMutation(mutationOptions)
 }

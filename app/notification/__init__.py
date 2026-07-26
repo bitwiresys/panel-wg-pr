@@ -3,6 +3,7 @@ from functools import wraps
 
 from app.models.admin import AdminDetails
 from app.models.admin_role import AdminRoleResponse
+from app.models.api_key import APIKeyResponse
 from app.models.core import CoreResponse
 from app.models.group import GroupResponse
 from app.models.host import BaseHost

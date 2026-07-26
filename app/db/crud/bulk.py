@@ -1,10 +1,8 @@
-from datetime import datetime as dt, timezone as tz
-from typing import Optional
+from datetime import UTC, datetime as dt
 
 from sqlalchemy import and_, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.db.models import (
     Admin,
@@ -25,7 +23,7 @@ from .user import load_user_attrs
 
 async def reset_all_users_data_usage(
     db: AsyncSession,
-    admin: Optional[Admin] = None,
+    admin: Admin | None = None,
     *,
     clean_chart_data: bool = False,
 ):
@@ -82,7 +80,7 @@ async def disable_all_active_users(db: AsyncSession, admin: Admin | None = None)
 
     await db.execute(
         query.values(
-            {User.status: UserStatus.disabled, User.last_status_change: dt.now(tz.utc)},
+            {User.status: UserStatus.disabled, User.last_status_change: dt.now(UTC)},
         )
     )
 
@@ -112,12 +110,12 @@ async def activate_all_disabled_users(db: AsyncSession, admin: Admin | None = No
 
     await db.execute(
         query_for_on_hold_users.values(
-            {User.status: UserStatus.on_hold, User.last_status_change: dt.now(tz.utc)},
+            {User.status: UserStatus.on_hold, User.last_status_change: dt.now(UTC)},
         )
     )
     await db.execute(
         query_for_active_users.values(
-            {User.status: UserStatus.active, User.last_status_change: dt.now(tz.utc)},
+            {User.status: UserStatus.active, User.last_status_change: dt.now(UTC)},
         )
     )
 
@@ -268,21 +266,6 @@ async def count_bulk_group_scope(db: AsyncSession, bulk_model: BulkGroup) -> int
     return (await db.execute(select(func.count(User.id)).where(final_filter))).scalar_one_or_none() or 0
 
 
-async def get_bulk_wireguard_peer_ip_users(
-    db: AsyncSession,
-    bulk_model: BulkUserFilter,
-    admin_id: int | None = None,
-) -> list[User]:
-    final_filter = _create_final_filter(bulk_model)
-    if admin_id is not None:
-        final_filter = and_(final_filter, User.admin_id == admin_id)
-
-    result = await db.execute(
-        select(User).options(selectinload(User.groups).selectinload(Group.inbounds)).where(final_filter)
-    )
-    return list(result.unique().scalars().all())
-
-
 def _create_final_filter(bulk_model: BulkUserFilter):
     """Create a comprehensive SQLAlchemy filter condition from a bulk model."""
     other_conditions = []
@@ -324,7 +307,7 @@ async def update_users_expire(db: AsyncSession, bulk_model: BulkUser) -> tuple[l
     ).scalar_one_or_none() or 0
     # Get database-specific datetime addition expression
     new_expire = get_datetime_add_expression(db, User.expire, bulk_model.amount)
-    current_time = dt.now(tz.utc)
+    current_time = dt.now(UTC)
 
     # First, get the users that will have status changes BEFORE updating
     status_change_conditions = or_(

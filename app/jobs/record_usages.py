@@ -4,7 +4,7 @@ import random
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime as dt, timedelta as td, timezone as tz
+from datetime import UTC, datetime as dt, timedelta as td
 from operator import attrgetter
 
 from PasarGuardNodeBridge import NodeAPIError, PasarGuardNode
@@ -72,7 +72,7 @@ def _process_node_chunk(chunk_data: tuple) -> dict:
     Process a chunk of node data - lightweight CPU operation.
     Uses simple arithmetic and dict operations that release GIL, perfect for threads.
     """
-    node_id, params, coeff = chunk_data
+    _node_id, params, coeff = chunk_data
     users_usage = defaultdict(int)
     for param in params:
         uid = int(param["uid"])
@@ -312,10 +312,13 @@ async def safe_execute(stmt, params=None, max_retries: int = 2):
 
     # Get dialect once before retry loop to avoid repeated DB calls
     dialect = await get_dialect()
-    if dialect == "mysql" and isinstance(stmt, Insert):
+    if (
+        dialect == "mysql"
+        and isinstance(stmt, Insert)
+        and (not hasattr(stmt, "_post_values_clause") or stmt._post_values_clause is None)
+    ):
         # MySQL-specific IGNORE prefix - but skip if using ON DUPLICATE KEY UPDATE
-        if not hasattr(stmt, "_post_values_clause") or stmt._post_values_clause is None:
-            statement = stmt.prefix_with("IGNORE")
+        statement = stmt.prefix_with("IGNORE")
 
     for attempt in range(max_retries):
         try:
@@ -364,7 +367,7 @@ async def safe_execute(stmt, params=None, max_retries: int = 2):
             raise
 
 
-def _get_time_bucket(now: dt = None) -> dt:
+def _get_time_bucket(now: dt | None = None) -> dt:
     """
     Get 10-minute time bucket instead of hourly to reduce hot row contention.
     This reduces lock contention by 6x (60 minutes / 10 minutes = 6).
@@ -376,7 +379,7 @@ def _get_time_bucket(now: dt = None) -> dt:
         datetime rounded down to 10-minute bucket
     """
     if now is None:
-        now = dt.now(tz.utc)
+        now = dt.now(UTC)
     # Round down to 10-minute bucket: minute // 10 * 10
     return now.replace(minute=(now.minute // 10) * 10, second=0, microsecond=0)
 
@@ -720,7 +723,7 @@ async def _record_user_usages_impl():
             user_stmt = (
                 update(User)
                 .where(User.id == bindparam("uid"))
-                .values(used_traffic=User.used_traffic + bindparam("value"), online_at=dt.now(tz.utc))
+                .values(used_traffic=User.used_traffic + bindparam("value"), online_at=dt.now(UTC))
                 .execution_options(synchronize_session=False)
             )
             async with JOB_SEM:
@@ -766,9 +769,9 @@ async def _record_user_usages_impl():
             f"{len(filtered_node_params)} nodes"
         )
 
-    except Exception as e:
+    except Exception:
         job_duration = time.time() - job_start_time
-        logger.error(f"User usage recording failed after {job_duration:.2f}s: {e}", exc_info=True)
+        logger.exception(f"User usage recording failed after {job_duration:.2f}s")
         raise
 
 
@@ -779,7 +782,7 @@ async def record_user_usages():
     """
     try:
         await asyncio.wait_for(_record_user_usages_impl(), timeout=120)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("record_user_usages killed after 120s timeout")
     except asyncio.CancelledError:
         logger.warning("record_user_usages was cancelled")
@@ -865,9 +868,9 @@ async def _record_node_usages_impl():
             f"{len(node_update_params)} nodes, total: {total_up + total_down} bytes"
         )
 
-    except Exception as e:
+    except Exception:
         job_duration = time.time() - job_start_time
-        logger.error(f"Node usage recording failed after {job_duration:.2f}s: {e}", exc_info=True)
+        logger.exception(f"Node usage recording failed after {job_duration:.2f}s")
         raise
 
 
@@ -878,7 +881,7 @@ async def record_node_usages():
     """
     try:
         await asyncio.wait_for(_record_node_usages_impl(), timeout=120)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.warning("record_node_usages killed after 120s timeout")
     except asyncio.CancelledError:
         logger.warning("record_node_usages was cancelled")
@@ -889,7 +892,7 @@ if runtime_settings.role.runs_node:
         record_user_usages,
         "interval",
         seconds=job_settings.record_user_usages_interval,
-        start_date=dt.now(tz.utc) + td(seconds=30),
+        start_date=dt.now(UTC) + td(seconds=30),
         id="record_user_usages",
     )
 
@@ -897,6 +900,6 @@ if runtime_settings.role.runs_node:
         record_node_usages,
         "interval",
         seconds=job_settings.record_node_usages_interval,
-        start_date=dt.now(tz.utc) + td(seconds=15),
+        start_date=dt.now(UTC) + td(seconds=15),
         id="record_node_usages",
     )

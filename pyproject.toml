@@ -26,7 +26,7 @@ dependencies = [
     "rich>=15.0.0",
     "uvicorn==0.51.0",
     "sse-starlette>=3.4.6",
-    "aiohttp>=3.14.2",
+    "aiohttp>=3.14.3",
     "packaging>=26.2",
     "sqlalchemy[asyncio]>=2.0.51",
     "aiosqlite>=0.21.0",
@@ -52,6 +52,17 @@ fix = true
 
 [tool.ruff.lint]
 fixable = ["ALL"]
+# Intentional resilience / no-op catch patterns across the codebase.
+ignore = ["BLE001", "S110"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency injection is the standard Depends()/factory pattern.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.params.Depends",
+    "app.routers.authentication.require_permission",
+    "app.routers.authentication.require_scope_all",
+]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true
@@ -70,7 +81,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-watch>=4.2.0",
-    "ruff>=0.15.22",
+    "ruff>=0.16.0",
     "sqlalchemy-utils>=0.41.2",
     "watchfiles>=1.2.0",
 ]
