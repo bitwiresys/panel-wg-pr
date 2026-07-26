@@ -15,6 +15,7 @@ from app.models.user import UsersResponseWithInbounds
 from app.settings import subscription_settings
 from app.subscription.client_templates import subscription_client_templates, subscription_xray_templates
 from app.utils.system import readable_size
+from config import wireguard_settings
 
 from . import (
     ClashConfiguration,

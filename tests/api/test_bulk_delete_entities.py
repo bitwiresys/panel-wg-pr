@@ -8,7 +8,6 @@ from sqlalchemy import func, select, update
 
 from app.db.crud.node import create_node as db_create_node, remove_node as db_remove_node
 from app.db.models import (
-    APIKey,
     Admin,
     AdminUsageLogs,
     APIKey,

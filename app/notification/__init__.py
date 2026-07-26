@@ -8,7 +8,6 @@ from app.models.core import CoreResponse
 from app.models.group import GroupResponse
 from app.models.host import BaseHost
 from app.models.node import NodeNotification, NodeResponse
-from app.models.api_key import APIKeyResponse
 from app.models.user import UserNotificationResponse
 from app.models.user_template import UserTemplateResponse
 from app.settings import notification_enable

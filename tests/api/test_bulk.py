@@ -61,6 +61,21 @@ def set_user_wireguard_keys(username: str, private_key: str, public_key: str) ->
     asyncio.run(_set_keys())
 
 
+def set_user_wireguard_peer_ips(username: str, peer_ips: list[str]) -> None:
+    async def _set_peer_ips():
+        async with TestSession() as session:
+            result = await session.execute(select(User).where(User.username == username))
+            db_user = result.scalar_one()
+            proxy_settings = dict(db_user.proxy_settings or {})
+            wireguard_settings = dict(proxy_settings.get("wireguard") or {})
+            wireguard_settings["peer_ips"] = peer_ips
+            proxy_settings["wireguard"] = wireguard_settings
+            db_user.proxy_settings = proxy_settings
+            await session.commit()
+
+    asyncio.run(_set_peer_ips())
+
+
 def get_user_sub_revoked_at(username: str):
     async def _get_revoked_at():
         async with TestSession() as session:
@@ -725,7 +740,7 @@ def test_bulk_wireguard_reallocate_peer_ips_repairs_duplicates(access_token):
             "interface_name": interface_name,
             "private_key": interface_private_key,
             "listen_port": 51820,
-            "address": [],
+            "address": ["10.71.0.1/24"],
         },
         type="wg",
         fallbacks=[],
@@ -798,7 +813,7 @@ def test_bulk_wireguard_reallocate_peer_ips_updates_multiple_selected_users(acce
             "interface_name": interface_name,
             "private_key": interface_private_key,
             "listen_port": 51820,
-            "address": [],
+            "address": ["10.72.0.1/24"],
         },
         type="wg",
         fallbacks=[],
@@ -874,7 +889,7 @@ def test_bulk_wireguard_reallocate_peer_ips_repairs_duplicate_keys(access_token)
             "interface_name": interface_name,
             "private_key": interface_private_key,
             "listen_port": 51820,
-            "address": [],
+            "address": ["10.73.0.1/24"],
         },
         type="wg",
         fallbacks=[],
