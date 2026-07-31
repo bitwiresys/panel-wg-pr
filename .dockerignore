@@ -22,7 +22,8 @@ venv*
 LICENSE
 install_service.sh
 PasarGuard.code-workspace
-scripts
+scripts/*
+!scripts/regenerate_node_bridge_proto.py
 
 # Dev tooling / CI (not used at runtime)
 Makefile
