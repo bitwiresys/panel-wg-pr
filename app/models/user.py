@@ -440,6 +440,14 @@ class BulkUser(BulkUserFilter):
     amount: int
 
 
+class BulkUserExpire(BulkUser):
+    anchor: Literal["expire", "now"] = Field(
+        default="expire",
+        description="'expire': add amount to each user's current expire date (default). "
+        "'now': set expire to now + amount for every matched user, regardless of their current expire date.",
+    )
+
+
 class BulkUsersProxy(BulkUserFilter):
     method: ShadowsocksMethods | None = Field(default=None)
 

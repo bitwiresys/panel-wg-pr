@@ -1,4 +1,4 @@
-from datetime import UTC, datetime as dt
+from datetime import UTC, datetime as dt, timedelta
 
 from sqlalchemy import and_, case, cast, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
@@ -16,7 +16,7 @@ from app.db.models import (
     users_groups_association,
 )
 from app.models.group import BulkGroup
-from app.models.user import BulkUser, BulkUserFilter, BulkUsersProxy
+from app.models.user import BulkUser, BulkUserExpire, BulkUserFilter, BulkUsersProxy
 
 from .general import get_datetime_add_expression
 from .user import load_user_attrs
@@ -241,7 +241,7 @@ async def remove_groups_from_users(
     return users, count_effctive_users
 
 
-async def count_bulk_expire_targets(db: AsyncSession, bulk_model: BulkUser) -> int:
+async def count_bulk_expire_targets(db: AsyncSession, bulk_model: BulkUserExpire) -> int:
     final_filter = _create_final_filter(bulk_model)
     return (
         await db.execute(select(func.count(User.id)).where(and_(final_filter, User.expire.isnot(None))))
@@ -312,7 +312,9 @@ def _create_final_filter(bulk_model: BulkUserFilter):
         return True
 
 
-async def update_users_expire(db: AsyncSession, bulk_model: BulkUser) -> tuple[list[User], int] | tuple[list, int]:
+async def update_users_expire(
+    db: AsyncSession, bulk_model: BulkUserExpire
+) -> tuple[list[User], int] | tuple[list, int]:
     """
     Bulk update user expiration dates and return list of User objects where status changed.
     """
@@ -321,9 +323,14 @@ async def update_users_expire(db: AsyncSession, bulk_model: BulkUser) -> tuple[l
     count_effctive_users = (
         await db.execute(select(func.count(User.id)).where(and_(final_filter, User.expire.isnot(None))))
     ).scalar_one_or_none() or 0
-    # Get database-specific datetime addition expression
-    new_expire = get_datetime_add_expression(db, User.expire, bulk_model.amount)
     current_time = dt.now(UTC)
+
+    if bulk_model.anchor == "now":
+        # Same absolute expire for every matched user, independent of their current expire date
+        new_expire = current_time + timedelta(seconds=bulk_model.amount)
+    else:
+        # Get database-specific datetime addition expression
+        new_expire = get_datetime_add_expression(db, User.expire, bulk_model.amount)
 
     # First, get the users that will have status changes BEFORE updating
     status_change_conditions = or_(

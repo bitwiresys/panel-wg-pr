@@ -3214,6 +3214,34 @@ export interface BulkUser {
   amount: number
 }
 
+export type BulkUserExpireExpireBefore = string | null
+
+export type BulkUserExpireExpireAfter = string | null
+
+export type BulkUserExpireAnchor = (typeof BulkUserExpireAnchor)[keyof typeof BulkUserExpireAnchor]
+
+/**
+ * 'expire': add amount to each user's current expire date (default). 'now': set expire to now + amount for every matched user, regardless of their current expire date.
+ */
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const BulkUserExpireAnchor = {
+  expire: 'expire',
+  now: 'now',
+} as const
+
+export interface BulkUserExpire {
+  dry_run?: boolean
+  group_ids?: number[]
+  admins?: number[]
+  users?: number[]
+  status?: UserStatus[]
+  expire_after?: BulkUserExpireExpireAfter
+  expire_before?: BulkUserExpireExpireBefore
+  amount: number
+  /** 'expire': add amount to each user's current expire date (default). 'now': set expire to now + amount for every matched user, regardless of their current expire date. */
+  anchor?: BulkUserExpireAnchor
+}
+
 /**
  * Response model for bulk node actions.
  */
@@ -13487,6 +13515,8 @@ export const useModifyUserWithTemplateById = <TData = Awaited<ReturnType<typeof 
  * Bulk expire users based on the provided criteria.
 
 - **amount**: amount to adjust the user's quota (in seconds, positive to increase, negative to decrease) required
+- **anchor**: "expire" (default) adds amount to each user's current expire date; "now" sets expire to
+  now + amount for every matched user, regardless of their current expire date
 - **user_ids**: Optional list of user IDs to modify
 - **admins**: Optional list of admin IDs — their users will be targeted
 - **status**: Optional status to filter users (e.g., "expired", "active"), Empty means no filtering
@@ -13495,8 +13525,8 @@ export const useModifyUserWithTemplateById = <TData = Awaited<ReturnType<typeof 
 - **expire_before**: Optional UTC datetime to filter users whose expire date is on or before this date
  * @summary Bulk sum/sub to expire of users
  */
-export const bulkModifyUsersExpire = (bulkUser: BodyType<BulkUser>, signal?: AbortSignal) => {
-  return orvalFetcher<unknown>({ url: `/api/users/bulk/expire`, method: 'POST', headers: { 'Content-Type': 'application/json' }, data: bulkUser, signal })
+export const bulkModifyUsersExpire = (bulkUserExpire: BodyType<BulkUserExpire>, signal?: AbortSignal) => {
+  return orvalFetcher<unknown>({ url: `/api/users/bulk/expire`, method: 'POST', headers: { 'Content-Type': 'application/json' }, data: bulkUserExpire, signal })
 }
 
 export const getBulkModifyUsersExpireMutationOptions = <
@@ -13504,7 +13534,7 @@ export const getBulkModifyUsersExpireMutationOptions = <
   TError = ErrorType<Unauthorized | HTTPValidationError>,
   TContext = unknown,
 >(options?: {
-  mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkUser> }, TContext>
+  mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkUserExpire> }, TContext>
 }) => {
   const mutationKey = ['bulkModifyUsersExpire']
   const { mutation: mutationOptions } = options
@@ -13513,25 +13543,25 @@ export const getBulkModifyUsersExpireMutationOptions = <
       : { ...options, mutation: { ...options.mutation, mutationKey } }
     : { mutation: { mutationKey } }
 
-  const mutationFn: MutationFunction<Awaited<ReturnType<typeof bulkModifyUsersExpire>>, { data: BodyType<BulkUser> }> = props => {
+  const mutationFn: MutationFunction<Awaited<ReturnType<typeof bulkModifyUsersExpire>>, { data: BodyType<BulkUserExpire> }> = props => {
     const { data } = props ?? {}
 
     return bulkModifyUsersExpire(data)
   }
 
-  return { mutationFn, ...mutationOptions } as UseMutationOptions<TData, TError, { data: BodyType<BulkUser> }, TContext>
+  return { mutationFn, ...mutationOptions } as UseMutationOptions<TData, TError, { data: BodyType<BulkUserExpire> }, TContext>
 }
 
 export type BulkModifyUsersExpireMutationResult = NonNullable<Awaited<ReturnType<typeof bulkModifyUsersExpire>>>
-export type BulkModifyUsersExpireMutationBody = BodyType<BulkUser>
+export type BulkModifyUsersExpireMutationBody = BodyType<BulkUserExpire>
 export type BulkModifyUsersExpireMutationError = ErrorType<Unauthorized | HTTPValidationError>
 
 /**
  * @summary Bulk sum/sub to expire of users
  */
 export const useBulkModifyUsersExpire = <TData = Awaited<ReturnType<typeof bulkModifyUsersExpire>>, TError = ErrorType<Unauthorized | HTTPValidationError>, TContext = unknown>(options?: {
-  mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkUser> }, TContext>
-}): UseMutationResult<TData, TError, { data: BodyType<BulkUser> }, TContext> => {
+  mutation?: UseMutationOptions<TData, TError, { data: BodyType<BulkUserExpire> }, TContext>
+}): UseMutationResult<TData, TError, { data: BodyType<BulkUserExpire> }, TContext> => {
   const mutationOptions = getBulkModifyUsersExpireMutationOptions(options)
 
   return useMutation(mutationOptions)

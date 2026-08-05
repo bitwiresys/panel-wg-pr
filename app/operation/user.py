@@ -67,6 +67,7 @@ from app.models.stats import (
 from app.models.user import (
     BulkOperationDryRunResponse,
     BulkUser,
+    BulkUserExpire,
     BulkUsersActionResponse,
     BulkUsersApplyTemplate,
     BulkUsersCreateResponse,
@@ -1892,7 +1893,7 @@ class UserOperation(BaseOperation):
 
         return self._build_bulk_action_response(users)
 
-    async def bulk_modify_expire(self, db: AsyncSession, bulk_model: BulkUser):
+    async def bulk_modify_expire(self, db: AsyncSession, bulk_model: BulkUserExpire):
         if bulk_model.dry_run:
             n = await count_bulk_expire_targets(db, bulk_model)
             return BulkOperationDryRunResponse(affected_users=n)
