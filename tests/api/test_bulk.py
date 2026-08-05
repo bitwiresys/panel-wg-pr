@@ -405,6 +405,65 @@ def test_bulk_expire_anchor_now(access_token):
         delete_core(access_token, core["id"])
 
 
+def test_bulk_expire_anchor_unix_timestamp(access_token):
+    """anchor=<unix timestamp> sets expire relative to that instant, not the current server time.
+
+    This makes the operation idempotent against downtime: replaying the same call with the same
+    anchor + amount always produces the same expire date, regardless of when it actually runs.
+    """
+    core = create_core(access_token)
+    group = create_group(access_token, name=unique_name("bulk_anchor_ts_group"))
+
+    now = dt.now(UTC).replace(microsecond=0)
+    anchor_time = now - td(days=30)
+    expired_8_days_ago = now - td(days=8)
+
+    user = create_user(access_token, group_ids=[group["id"]], payload={"username": unique_name("anchor_ts")})
+    client.put(
+        f"/api/user/{user['username']}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"expire": expired_8_days_ago.isoformat()},
+    )
+
+    try:
+        response = client.post(
+            "/api/users/bulk/expire",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"amount": 5 * 24 * 3600, "anchor": int(anchor_time.timestamp()), "users": [user["id"]]},
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        resp = client.get(f"/api/user/{user['username']}", headers={"Authorization": f"Bearer {access_token}"})
+        data = resp.json()
+        new_expire = dt.fromisoformat(data["expire"])
+        expected_expire = anchor_time + td(days=5)
+        # New expire should be ~anchor_time + amount, not now + amount and not old_expire + amount
+        assert abs((new_expire - expected_expire).total_seconds()) < 5
+    finally:
+        delete_user(access_token, user["username"])
+        delete_group(access_token, group["id"])
+        delete_core(access_token, core["id"])
+
+
+def test_bulk_expire_anchor_negative_timestamp_rejected(access_token):
+    response = client.post(
+        "/api/users/bulk/expire",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"amount": 3600, "anchor": -1},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+def test_bulk_expire_anchor_out_of_range_timestamp_rejected(access_token):
+    """A timestamp beyond what datetime can represent must be a clean 422, not an unhandled 500."""
+    response = client.post(
+        "/api/users/bulk/expire",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"amount": 3600, "anchor": 253402300800},
+    )
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 def test_bulk_data_limit_with_expire_range_without_expired_status(access_token):
     core = create_core(access_token)
     group = create_group(access_token, name=unique_name("bulk_data_range_group"))

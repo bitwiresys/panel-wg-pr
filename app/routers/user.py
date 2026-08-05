@@ -798,7 +798,9 @@ async def bulk_modify_users_expire(
 
     - **amount**: amount to adjust the user's quota (in seconds, positive to increase, negative to decrease) required
     - **anchor**: "expire" (default) adds amount to each user's current expire date; "now" sets expire to
-      now + amount for every matched user, regardless of their current expire date
+      now + amount for every matched user, regardless of their current expire date; a unix timestamp or ISO
+      datetime string anchors to that instant instead of "now", keeping the result reproducible even if the
+      request is retried or delayed (e.g. to stay in sync with an external billing clock)
     - **user_ids**: Optional list of user IDs to modify
     - **admins**: Optional list of admin IDs — their users will be targeted
     - **status**: Optional status to filter users (e.g., "expired", "active"), Empty means no filtering

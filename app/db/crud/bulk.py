@@ -325,12 +325,16 @@ async def update_users_expire(
     ).scalar_one_or_none() or 0
     current_time = dt.now(UTC)
 
-    if bulk_model.anchor == "now":
-        # Same absolute expire for every matched user, independent of their current expire date
-        new_expire = current_time + timedelta(seconds=bulk_model.amount)
-    else:
+    if bulk_model.anchor == "expire":
         # Get database-specific datetime addition expression
         new_expire = get_datetime_add_expression(db, User.expire, bulk_model.amount)
+    else:
+        # Same absolute expire for every matched user, independent of their current expire date.
+        # "now" anchors to the current server time; an explicit instant (already resolved to a
+        # datetime by BulkUserExpire.validate_anchor) anchors to that instead, so the result is
+        # reproducible regardless of when the request actually executes (e.g. downtime).
+        anchor_time = current_time if bulk_model.anchor == "now" else bulk_model.anchor
+        new_expire = anchor_time + timedelta(seconds=bulk_model.amount)
 
     # First, get the users that will have status changes BEFORE updating
     status_change_conditions = or_(
