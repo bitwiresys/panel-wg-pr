@@ -500,17 +500,28 @@ def _cleanup_target_user_conditions(
     expired_after: datetime | None = None,
     expired_before: datetime | None = None,
     admin_id: int | None = None,
-    target: Literal["expired", "limited"] = "expired",
+    target: Literal["expired", "limited", "on_hold", "disabled"] = "expired",
 ):
-    if target == "limited":
-        conditions = [User.is_limited]
-    else:
-        # Time-expired users support expiration date range filtering.
+    if target == "expired":
+        # Time-expired users: date range filters on the expiration date.
         conditions = [User.is_expired]
         if expired_after:
             conditions.append(User.expire >= expired_after)
         if expired_before:
             conditions.append(User.expire <= expired_before)
+    else:
+        # For limited / on_hold / disabled: date range filters apply to
+        # last_status_change (i.e. when the user entered that status).
+        status_map = {
+            "limited": UserStatus.limited,
+            "on_hold": UserStatus.on_hold,
+            "disabled": UserStatus.disabled,
+        }
+        conditions = [User.status == status_map[target]]
+        if expired_after:
+            conditions.append(User.last_status_change >= expired_after.replace(tzinfo=None))
+        if expired_before:
+            conditions.append(User.last_status_change <= expired_before.replace(tzinfo=None))
 
     if admin_id is not None:
         conditions.append(User.admin_id == admin_id)
@@ -523,7 +534,8 @@ async def remove_expired_users(
     expired_after: datetime | None = None,
     expired_before: datetime | None = None,
     admin_id: int | None = None,
-    target: Literal["expired", "limited"] = "expired",
+    target: Literal["expired", "limited", "on_hold", "disabled"] = "expired",
+    dry_run: bool = False,
 ) -> list[str]:
     conditions = _cleanup_target_user_conditions(expired_after, expired_before, admin_id, target)
 
@@ -531,8 +543,12 @@ async def remove_expired_users(
     if not rows:
         return []
 
-    user_ids = [user_id for user_id, _ in rows]
     usernames = [username for _, username in rows]
+
+    if dry_run:
+        return usernames
+
+    user_ids = [user_id for user_id, _ in rows]
 
     for start in range(0, len(user_ids), 1000):
         chunk = user_ids[start : start + 1000]
@@ -619,17 +635,15 @@ async def get_usage_percentage_reached_users(db: AsyncSession, percentage: int) 
     )
 
     stmt = (
-        select(User)
+        _build_user_select_stmt()
         .options(joinedload(User.notification_reminders))
         .where(User.status == UserStatus.active)
         .where(User.usage_percentage >= percentage)
         .where(not_(existing_reminder_subq))  # Only users without existing reminders
     )
 
-    users = list((await db.execute(stmt)).unique().scalars().all())
-    for user in users:
-        await load_user_attrs(user)
-    return users
+    # All relations (admin, next_plan, usage_logs, groups) eagerly loaded via _build_user_select_stmt
+    return list((await db.execute(stmt)).unique().scalars().all())
 
 
 async def get_days_left_reached_users(db: AsyncSession, days: int) -> list[User]:
@@ -649,7 +663,7 @@ async def get_days_left_reached_users(db: AsyncSession, days: int) -> list[User]
     )
 
     stmt = (
-        select(User)
+        _build_user_select_stmt()
         .options(joinedload(User.notification_reminders))
         .where(User.status == UserStatus.active)
         .where(User.expire.isnot(None))
@@ -657,10 +671,8 @@ async def get_days_left_reached_users(db: AsyncSession, days: int) -> list[User]
         .where(not_(existing_reminder_subq))  # Only users without existing reminders
     )
 
-    users = list((await db.execute(stmt)).unique().scalars().all())
-    for user in users:
-        await load_user_attrs(user)
-    return users
+    # All relations (admin, next_plan, usage_logs, groups) eagerly loaded via _build_user_select_stmt
+    return list((await db.execute(stmt)).unique().scalars().all())
 
 
 async def get_user_usages(
@@ -1325,23 +1337,89 @@ async def get_users_sub_update_list(
     return result, count
 
 
+def _subscription_update_from_clause(
+    user_id: int | None = None,
+    admin_id: int | None = None,
+):
+    conditions = []
+    if user_id is not None:
+        conditions.append(UserSubscriptionUpdate.user_id == user_id)
+        from_clause = UserSubscriptionUpdate.__table__
+    else:
+        from_clause = UserSubscriptionUpdate.__table__.join(User, UserSubscriptionUpdate.user_id == User.id)
+        if admin_id:
+            conditions.append(User.admin_id == admin_id)
+    return from_clause, conditions
+
+
 async def get_users_subscription_agent_counts(
-    db: AsyncSession, user_id: int | None = None, admin_id: int | None = None
+    db: AsyncSession,
+    user_id: int | None = None,
+    admin_id: int | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    period: Period | None = None,
 ) -> list[tuple[str, int]]:
     stmt = select(UserSubscriptionUpdate.user_agent, func.count().label("count"))
+    from_clause, conditions = _subscription_update_from_clause(user_id=user_id, admin_id=admin_id)
 
-    if user_id is not None:
-        stmt = stmt.where(UserSubscriptionUpdate.user_id == user_id)
-    else:
-        stmt = stmt.join(User, UserSubscriptionUpdate.user_id == User.id)
+    if start is not None:
+        start_utc = (
+            get_complete_period_start_for_filter(start, period) if period is not None else to_utc_for_filter(start)
+        )
+        conditions.append(UserSubscriptionUpdate.created_at >= start_utc)
+    if end is not None:
+        conditions.append(UserSubscriptionUpdate.created_at < to_utc_for_filter(end))
 
-        if admin_id:
-            stmt = stmt.where(User.admin_id == admin_id)
-
+    stmt = stmt.select_from(from_clause)
+    if conditions:
+        stmt = stmt.where(and_(*conditions))
     stmt = stmt.group_by(UserSubscriptionUpdate.user_agent)
 
     result = await db.execute(stmt)
     return [(agent, count) for agent, count in result.all()]
+
+
+async def get_users_subscription_agent_stats(
+    db: AsyncSession,
+    start: datetime,
+    end: datetime,
+    period: Period = Period.hour,
+    user_id: int | None = None,
+    admin_id: int | None = None,
+) -> list[dict]:
+    """Retrieve subscription update counts grouped by agent and period."""
+    trunc_expr = _build_trunc_expression(db, period, UserSubscriptionUpdate.created_at, start)
+    start_utc = get_complete_period_start_for_filter(start, period)
+    end_utc = to_utc_for_filter(end)
+    from_clause, conditions = _subscription_update_from_clause(user_id=user_id, admin_id=admin_id)
+    conditions.extend(
+        [
+            UserSubscriptionUpdate.created_at >= start_utc,
+            UserSubscriptionUpdate.created_at < end_utc,
+        ]
+    )
+
+    stmt = (
+        select(
+            trunc_expr.label("period_start"),
+            UserSubscriptionUpdate.user_agent.label("agent"),
+            func.count().label("count"),
+        )
+        .select_from(from_clause)
+        .where(and_(*conditions))
+        .group_by(trunc_expr, UserSubscriptionUpdate.user_agent)
+        .order_by(trunc_expr)
+    )
+
+    result = await db.execute(stmt)
+    dialect = db.bind.dialect.name
+    rows = []
+    for row in result.mappings():
+        row_dict = dict(row)
+        attach_timezone_to_period_start(row_dict, start.tzinfo, dialect)
+        rows.append(row_dict)
+    return rows
 
 
 async def autodelete_expired_users(
