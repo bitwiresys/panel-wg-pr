@@ -137,11 +137,9 @@ export function flattenOutboundSettings(ob: Outbound): Record<string, unknown> {
   return { ...raw }
 }
 
-/** Xray Hysteria outbound is v2-only; `version: 2` is implied — omit from saved JSON / editor body. */
+/** Xray Hysteria outbound requires `version: 2` in `settings` (not implied) — ensure it's always present. */
 export function stripHysteriaOutboundRedundantVersion(settings: Record<string, unknown>): Record<string, unknown> {
-  if (settings.version !== 2 && settings.version !== '2') return settings
-  const { version: _removed, ...rest } = settings
-  return rest
+  return { ...settings, version: 2 }
 }
 
 /** Map mistaken `rewrite*` keys (older UI) onto Xray `DNSOutboundConfig` (`network`, `address`, `port`). */
