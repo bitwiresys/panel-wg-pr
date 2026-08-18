@@ -69,5 +69,6 @@ get_user_ip_ranking_query = make_query_dependency(
         "status": Query(None),
         "ip_count_min": Query(None, ge=0),
         "ip_count_max": Query(None, ge=0),
+        "node_ids": Query(None, alias="node_ids"),
     },
 )

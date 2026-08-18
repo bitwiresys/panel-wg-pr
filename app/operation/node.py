@@ -517,8 +517,8 @@ class NodeOperation(BaseOperation):
     async def get_user_ip_list_all_nodes(self, db: AsyncSession, user_id: int) -> UserIPListAll:
         return await self._get_user_ip_list_all_impl(db, user_id)
 
-    async def get_users_online_ips(self) -> dict[int, dict[str, int]]:
-        return await self._get_users_online_ips()
+    async def get_users_online_ips(self, node_ids: list[int] | None = None) -> dict[int, dict[str, int]]:
+        return await self._get_users_online_ips(node_ids)
 
     async def get_users_ip_ranking(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
         return await self._get_users_ip_ranking_impl(db, query)
@@ -954,15 +954,19 @@ class NodeOperation(BaseOperation):
         except RuntimeError as exc:
             await self.handle_rpc_error(exc)
 
-    async def _get_users_online_ips(self) -> dict[int, dict[str, int]]:
-        """Online IPs per user (ip -> last-seen unix timestamp), unioned across all healthy nodes.
+    async def _get_users_online_ips(self, node_ids: list[int] | None = None) -> dict[int, dict[str, int]]:
+        """Online IPs per user (ip -> last-seen unix timestamp), unioned across healthy nodes.
 
         Used to rank users by concurrent-device/IP count (e.g. to spot
         credential sharing). Nodes that don't support the bulk RPC yet
         (REST-transport, or an older node binary) are skipped rather than
         failing the whole ranking -- see _get_node_users_ip_list_bulk_safe.
+        If node_ids is given, only those nodes are queried.
         """
         nodes = await node_manager.get_healthy_nodes()
+        if node_ids is not None:
+            wanted = set(node_ids)
+            nodes = [(node_id, node) for node_id, node in nodes if node_id in wanted]
         node_results = await asyncio.gather(*(self._get_node_users_ip_list_bulk_safe(node_id) for node_id, _ in nodes))
 
         ips_by_user: dict[int, dict[str, int]] = {}
@@ -1017,12 +1021,12 @@ class NodeOperation(BaseOperation):
         return UserIPRankingList(users=entries, updated_at=updated_at)
 
     async def _get_users_ip_ranking_local(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
-        ips_by_user = await self._get_users_online_ips()
+        ips_by_user = await self._get_users_online_ips(query.node_ids)
         return await self._resolve_ip_ranking(db, ips_by_user, datetime.now(UTC), query)
 
     async def _get_users_ip_ranking_remote(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
         try:
-            data = await node_nats_client.request("get_users_ip_ranking", {})
+            data = await node_nats_client.request("get_users_ip_ranking", {"node_ids": query.node_ids})
         except RuntimeError as exc:
             await self.handle_rpc_error(exc)
             return

@@ -375,6 +375,7 @@ class UserIPRankingQuery(BaseModel):
     status: UserStatus | list[UserStatus] | None = Field(default=None)
     ip_count_min: int | None = Field(default=None, ge=0)
     ip_count_max: int | None = Field(default=None, ge=0)
+    node_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("node_ids", "node_id"))
     model_config = ConfigDict(populate_by_name=True)
 
 

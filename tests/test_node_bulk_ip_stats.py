@@ -187,6 +187,32 @@ async def test_online_ips_skips_nodes_that_return_none(monkeypatch: pytest.Monke
     assert result == {1: {"1.2.3.4": 1000}}
 
 
+@pytest.mark.asyncio
+async def test_online_ips_filters_by_node_ids(monkeypatch: pytest.MonkeyPatch):
+    operation = NodeOperation(operator_type=OperatorType.API)
+
+    per_node = {
+        1: {"1": {"1.2.3.4": 1000}},
+        2: {"1": {"5.6.7.8": 2000}},
+    }
+    queried = []
+
+    async def fake_get_healthy_nodes():
+        return [(1, object()), (2, object())]
+
+    async def fake_bulk(node_id):
+        queried.append(node_id)
+        return per_node[node_id]
+
+    monkeypatch.setattr("app.operation.node.node_manager.get_healthy_nodes", fake_get_healthy_nodes)
+    monkeypatch.setattr(operation, "_get_node_users_ip_list_bulk_safe", fake_bulk)
+
+    result = await operation._get_users_online_ips(node_ids=[2])
+
+    assert queried == [2]
+    assert result == {1: {"5.6.7.8": 2000}}
+
+
 def _ips(count: int, *, offset: int = 0) -> dict[str, int]:
     """count distinct fake IPs with dummy last-seen timestamps, for ips_by_user fixtures."""
     return {f"10.0.{offset}.{i}": 1000 + i for i in range(count)}
