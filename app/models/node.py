@@ -1,12 +1,13 @@
 import re
+from datetime import datetime as dt
 from enum import Enum
 from ipaddress import ip_address
 from uuid import UUID
 
 from cryptography.x509 import load_pem_x509_certificate
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
-from app.db.models import DataLimitResetStrategy, NodeConnectionType, NodeStatus
+from app.db.models import DataLimitResetStrategy, NodeConnectionType, NodeStatus, UserStatus
 from app.models.stats import Period
 
 from .validators import ListValidator, OptionalAwareDatetime, ProxyValidator
@@ -338,6 +339,43 @@ class UserIPListAll(BaseModel):
     """User IP lists for all nodes"""
 
     nodes: dict[int, UserIPList | None]  # {node_id: UserIPList | None}
+
+
+class UserIPRankingEntry(BaseModel):
+    """One user's online IPs (unioned across all nodes) and current traffic usage"""
+
+    user_id: int
+    username: str
+    ips: dict[str, int]  # {ip_address: last_seen unix timestamp}, same shape as UserIPList.ips
+    distinct_ip_count: int
+    used_traffic: int  # current period (User.used_traffic), not lifetime_used_traffic -- see User model
+
+
+class UserIPRankingList(BaseModel):
+    """Users ranked by distinct online-IP count, most first"""
+
+    users: list[UserIPRankingEntry]
+    updated_at: dt | None  # last time the ranking was computed; None if never computed yet
+
+
+class UserOnlineIPsSnapshot(BaseModel):
+    """Wire format for handing per-user online-IP maps, computed live, from
+    a node-role process to a backend-role process over NATS (see
+    app/node/worker.py's get_users_ip_ranking handler)."""
+
+    users: dict[int, dict[str, int]] = Field(default_factory=dict)  # {user_id: {ip: last_seen}}
+    computed_at: dt
+
+
+class UserIPRankingQuery(BaseModel):
+    offset: int | None = Field(default=None)
+    limit: int | None = Field(default=None)
+    admin_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("admin_ids", "admin_id"))
+    group_ids: list[int] | None = Field(default=None, alias="group")
+    status: UserStatus | list[UserStatus] | None = Field(default=None)
+    ip_count_min: int | None = Field(default=None, ge=0)
+    ip_count_max: int | None = Field(default=None, ge=0)
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class NodeCoreUpdate(BaseModel):
