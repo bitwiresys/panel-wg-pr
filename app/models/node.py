@@ -7,8 +7,9 @@ from uuid import UUID
 from cryptography.x509 import load_pem_x509_certificate
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
-from app.db.models import DataLimitResetStrategy, NodeConnectionType, NodeStatus, UserStatus
+from app.db.models import DataLimitResetStrategy, NodeConnectionType, NodeStatus
 from app.models.stats import Period
+from app.models.user import PaginatedAdminGroupStatusQuery
 
 from .validators import ListValidator, OptionalAwareDatetime, ProxyValidator
 
@@ -356,6 +357,10 @@ class UserIPRankingList(BaseModel):
 
     users: list[UserIPRankingEntry]
     updated_at: dt | None  # last time the ranking was computed; None if never computed yet
+    total: int = 0  # total matching users across all pages, for client-side pagination
+    skipped_node_count: int = (
+        0  # healthy nodes that couldn't be queried (REST-transport or old binary); ranking is partial if > 0
+    )
 
 
 class UserOnlineIPsSnapshot(BaseModel):
@@ -365,18 +370,13 @@ class UserOnlineIPsSnapshot(BaseModel):
 
     users: dict[int, dict[str, int]] = Field(default_factory=dict)  # {user_id: {ip: last_seen}}
     computed_at: dt
+    skipped_node_count: int = 0
 
 
-class UserIPRankingQuery(BaseModel):
-    offset: int | None = Field(default=None)
-    limit: int | None = Field(default=None)
-    admin_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("admin_ids", "admin_id"))
-    group_ids: list[int] | None = Field(default=None, alias="group")
-    status: UserStatus | list[UserStatus] | None = Field(default=None)
+class UserIPRankingQuery(PaginatedAdminGroupStatusQuery):
     ip_count_min: int | None = Field(default=None, ge=0)
     ip_count_max: int | None = Field(default=None, ge=0)
     node_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("node_ids", "node_id"))
-    model_config = ConfigDict(populate_by_name=True)
 
 
 class NodeCoreUpdate(BaseModel):

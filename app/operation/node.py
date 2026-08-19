@@ -517,7 +517,7 @@ class NodeOperation(BaseOperation):
     async def get_user_ip_list_all_nodes(self, db: AsyncSession, user_id: int) -> UserIPListAll:
         return await self._get_user_ip_list_all_impl(db, user_id)
 
-    async def get_users_online_ips(self, node_ids: list[int] | None = None) -> dict[int, dict[str, int]]:
+    async def get_users_online_ips(self, node_ids: list[int] | None = None) -> tuple[dict[int, dict[str, int]], int]:
         return await self._get_users_online_ips(node_ids)
 
     async def get_users_ip_ranking(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
@@ -954,7 +954,7 @@ class NodeOperation(BaseOperation):
         except RuntimeError as exc:
             await self.handle_rpc_error(exc)
 
-    async def _get_users_online_ips(self, node_ids: list[int] | None = None) -> dict[int, dict[str, int]]:
+    async def _get_users_online_ips(self, node_ids: list[int] | None = None) -> tuple[dict[int, dict[str, int]], int]:
         """Online IPs per user (ip -> last-seen unix timestamp), unioned across healthy nodes.
 
         Used to rank users by concurrent-device/IP count (e.g. to spot
@@ -962,16 +962,30 @@ class NodeOperation(BaseOperation):
         (REST-transport, or an older node binary) are skipped rather than
         failing the whole ranking -- see _get_node_users_ip_list_bulk_safe.
         If node_ids is given, only those nodes are queried.
+
+        Returns (ips_by_user, skipped_node_count) -- the caller surfaces the
+        skip count so an admin isn't misled by a ranking that's silently
+        missing data from nodes that couldn't be queried.
         """
         nodes = await node_manager.get_healthy_nodes()
         if node_ids is not None:
             wanted = set(node_ids)
             nodes = [(node_id, node) for node_id, node in nodes if node_id in wanted]
-        node_results = await asyncio.gather(*(self._get_node_users_ip_list_bulk_safe(node_id) for node_id, _ in nodes))
+        ip_tasks = {
+            node_id: asyncio.create_task(self._get_node_users_ip_list_bulk_safe(node_id)) for node_id, _ in nodes
+        }
+        await asyncio.gather(*ip_tasks.values(), return_exceptions=True)
 
         ips_by_user: dict[int, dict[str, int]] = {}
-        for node_result in node_results:
+        skipped_node_count = 0
+        for node_id, task in ip_tasks.items():
+            if task.exception():
+                logger.error(f"Error getting bulk IP list for node {node_id}: {task.exception()}")
+                skipped_node_count += 1
+                continue
+            node_result = task.result()
             if node_result is None:
+                skipped_node_count += 1
                 continue
             for email, ips in node_result.items():
                 try:
@@ -983,10 +997,15 @@ class NodeOperation(BaseOperation):
                     if last_seen > user_ips.get(ip, 0):
                         user_ips[ip] = last_seen
 
-        return ips_by_user
+        return ips_by_user, skipped_node_count
 
     async def _resolve_ip_ranking(
-        self, db: AsyncSession, ips_by_user: dict[int, dict[str, int]], updated_at, query: UserIPRankingQuery
+        self,
+        db: AsyncSession,
+        ips_by_user: dict[int, dict[str, int]],
+        updated_at,
+        query: UserIPRankingQuery,
+        skipped_node_count: int = 0,
     ) -> UserIPRankingList:
         counts = {
             user_id: len(ips)
@@ -1018,11 +1037,13 @@ class NodeOperation(BaseOperation):
             for user_id in page_ids
         ]
 
-        return UserIPRankingList(users=entries, updated_at=updated_at)
+        return UserIPRankingList(
+            users=entries, updated_at=updated_at, total=len(visible_ids), skipped_node_count=skipped_node_count
+        )
 
     async def _get_users_ip_ranking_local(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
-        ips_by_user = await self._get_users_online_ips(query.node_ids)
-        return await self._resolve_ip_ranking(db, ips_by_user, datetime.now(UTC), query)
+        ips_by_user, skipped_node_count = await self._get_users_online_ips(query.node_ids)
+        return await self._resolve_ip_ranking(db, ips_by_user, datetime.now(UTC), query, skipped_node_count)
 
     async def _get_users_ip_ranking_remote(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
         try:
@@ -1032,7 +1053,9 @@ class NodeOperation(BaseOperation):
             return
 
         snapshot = UserOnlineIPsSnapshot.model_validate(data)
-        return await self._resolve_ip_ranking(db, snapshot.users, snapshot.computed_at, query)
+        return await self._resolve_ip_ranking(
+            db, snapshot.users, snapshot.computed_at, query, snapshot.skipped_node_count
+        )
 
     async def _sync_node_users_local(self, db: AsyncSession, node_id: int, flush_users: bool) -> NodeResponse:
         db_node = await self.get_validated_node(db, node_id=node_id)

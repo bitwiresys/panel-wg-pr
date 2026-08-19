@@ -14,9 +14,7 @@ from tests.api import TestSession
 
 def _users_response(users: dict[str, dict[str, int]]) -> service.StatsAllOnlineIpListResponse:
     return service.StatsAllOnlineIpListResponse(
-        users={
-            email: service.StatsOnlineIpListResponse(name=email, ips=ips) for email, ips in users.items()
-        }
+        users={email: service.StatsOnlineIpListResponse(name=email, ips=ips) for email, ips in users.items()}
     )
 
 
@@ -139,9 +137,10 @@ async def test_online_ips_unions_across_nodes(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.operation.node.node_manager.get_healthy_nodes", fake_get_healthy_nodes)
     monkeypatch.setattr(operation, "_get_node_users_ip_list_bulk_safe", fake_bulk)
 
-    result = await operation._get_users_online_ips()
+    result, skipped_node_count = await operation._get_users_online_ips()
 
     assert result == {1: {"1.2.3.4": 1000, "5.6.7.8": 2000}, 2: {"9.9.9.9": 500}}
+    assert skipped_node_count == 0
 
 
 @pytest.mark.asyncio
@@ -162,9 +161,10 @@ async def test_online_ips_keeps_latest_last_seen_for_same_ip_across_nodes(monkey
     monkeypatch.setattr("app.operation.node.node_manager.get_healthy_nodes", fake_get_healthy_nodes)
     monkeypatch.setattr(operation, "_get_node_users_ip_list_bulk_safe", fake_bulk)
 
-    result = await operation._get_users_online_ips()
+    result, skipped_node_count = await operation._get_users_online_ips()
 
     assert result == {1: {"1.2.3.4": 2000}}
+    assert skipped_node_count == 0
 
 
 @pytest.mark.asyncio
@@ -182,9 +182,10 @@ async def test_online_ips_skips_nodes_that_return_none(monkeypatch: pytest.Monke
     monkeypatch.setattr("app.operation.node.node_manager.get_healthy_nodes", fake_get_healthy_nodes)
     monkeypatch.setattr(operation, "_get_node_users_ip_list_bulk_safe", fake_bulk)
 
-    result = await operation._get_users_online_ips()
+    result, skipped_node_count = await operation._get_users_online_ips()
 
     assert result == {1: {"1.2.3.4": 1000}}
+    assert skipped_node_count == 1
 
 
 @pytest.mark.asyncio
@@ -207,10 +208,11 @@ async def test_online_ips_filters_by_node_ids(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("app.operation.node.node_manager.get_healthy_nodes", fake_get_healthy_nodes)
     monkeypatch.setattr(operation, "_get_node_users_ip_list_bulk_safe", fake_bulk)
 
-    result = await operation._get_users_online_ips(node_ids=[2])
+    result, skipped_node_count = await operation._get_users_online_ips(node_ids=[2])
 
     assert queried == [2]
     assert result == {1: {"5.6.7.8": 2000}}
+    assert skipped_node_count == 0
 
 
 def _ips(count: int, *, offset: int = 0) -> dict[str, int]:
@@ -339,6 +341,7 @@ async def test_ip_ranking_applies_offset_and_limit_after_sorting():
 
     # sorted desc by count: limited(30), other_admin(20), active(10) -> offset 1, limit 1 -> other_admin
     assert [entry.user_id for entry in result.users] == [ids["other_admin"]]
+    assert result.total == 3
 
 
 @pytest.mark.asyncio

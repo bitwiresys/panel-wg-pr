@@ -259,8 +259,10 @@ class NodeWorkerService(BaseRpcService):
         return user_ips.model_dump()
 
     async def _get_users_ip_ranking(self, data: dict) -> dict:
-        users = await self._node_operator.get_users_online_ips(data.get("node_ids"))
-        return UserOnlineIPsSnapshot(users=users, computed_at=datetime.now(UTC)).model_dump(mode="json")
+        users, skipped_node_count = await self._node_operator.get_users_online_ips(data.get("node_ids"))
+        return UserOnlineIPsSnapshot(
+            users=users, computed_at=datetime.now(UTC), skipped_node_count=skipped_node_count
+        ).model_dump(mode="json")
 
     async def _update_node_api(self, data: dict) -> dict:
         node_id = data.get("node_id")
