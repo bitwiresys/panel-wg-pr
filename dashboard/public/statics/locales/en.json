@@ -382,7 +382,8 @@
           "macos": "macOS",
           "linux": "Linux",
           "appletv": "Apple TV",
-          "androidtv": "Android TV"
+          "androidtv": "Android TV",
+          "unknown": "Unknown"
         }
       },
       "resetToDefault": "Reset to Default",
@@ -1255,6 +1256,7 @@
     "addHost": "Create Host",
     "selectInbound": "Select an inbound",
     "selectStatus": "Select Status",
+    "selectDeviceOs": "Select Device OS",
     "remarkRequired": "Remark is required",
     "addressRequired": "Address is required",
     "portRequired": "Port is required",
@@ -1266,6 +1268,10 @@
       "limited": "Limited",
       "expired": "Expired",
       "onHold": "On Hold"
+    },
+    "deviceOs": {
+      "label": "Device OS",
+      "description": "Only show this host to subscriptions requesting one of these platforms. Leave empty to show it to everyone."
     },
     "port": "Port",
     "sni": "SNI",
@@ -1310,6 +1316,8 @@
     "editFailed": "Failed to modify host «{{name}}»",
     "noStatus": "No status selected",
     "clearAllStatuses": "Clear all statuses",
+    "noDeviceOs": "Shown to all platforms",
+    "clearAllDeviceOs": "Clear all platforms",
     "transportSettingsAccordion": "Transport Settings",
     "xhttp": {
       "mode": "Mode",
@@ -3248,6 +3256,14 @@
   "statistics.nodeStatsDescription": "Detailed traffic statistics for each node at this time period. Click on bars in the chart to view more details.",
   "statistics.clickForDetails": "Click for details",
   "statistics.clickForMore": "Click for more details",
+  "statistics.ipRanking.title": "Users Ranked by Online IP Count",
+  "statistics.ipRanking.description": "Users with the most distinct concurrent online IPs, computed live across all healthy nodes.",
+  "statistics.ipRanking.distinctIps": "Distinct IPs",
+  "statistics.ipRanking.viewIps": "View IPs",
+  "statistics.ipRanking.minIps": "Min IPs",
+  "statistics.ipRanking.maxIps": "Max IPs",
+  "statistics.ipRanking.nodesSelected": "{{count}} nodes",
+  "statistics.ipRanking.clearNodes": "Clear selection",
   "errors.connectionFailed": "Connection failed. Please check your network and try again.",
   "errors.statisticsLoadFailed": "Failed to Load Statistics",
   "usersTable.resetUsageTitle": "Reset User Usage",

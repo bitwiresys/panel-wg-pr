@@ -118,6 +118,7 @@ async def _prepare_subscription_inbound_data(
             finalmask_link=finalmask_link,
             priority=host.priority,
             status=list(host.status) if host.status else None,
+            device_os=list(host.device_os) if host.device_os else None,
             subscription_templates=host.subscription_templates.model_dump(exclude_none=True)
             if host.subscription_templates
             else None,
@@ -411,6 +412,7 @@ async def _prepare_subscription_inbound_data(
         finalmask_link=finalmask_link,
         priority=host.priority,
         status=list(host.status) if host.status else None,
+        device_os=list(host.device_os) if host.device_os else None,
         subscription_templates=host.subscription_templates.model_dump(exclude_none=True)
         if host.subscription_templates
         else None,

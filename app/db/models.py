@@ -501,6 +501,17 @@ class ProxyHostALPN(str, Enum):
     h3 = "h3"
 
 
+class HostPlatform(str, Enum):
+    android = "android"
+    ios = "ios"
+    windows = "windows"
+    macos = "macos"
+    linux = "linux"
+    appletv = "appletv"
+    androidtv = "androidtv"
+    unknown = "unknown"
+
+
 ProxyHostFingerprint = Enum(
     "ProxyHostFingerprint",
     {
@@ -556,6 +567,9 @@ class ProxyHost(Base, IdMixin):
     transport_settings: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), default=None)
     mux_settings: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), default=None)
     status: Mapped[list[UserStatus] | None] = mapped_column(EnumArray(UserStatus, 60), default=list, server_default="")
+    device_os: Mapped[list[HostPlatform] | None] = mapped_column(
+        EnumArray(HostPlatform, 100), default=list, server_default=""
+    )
     ech_config_list: Mapped[str | None] = mapped_column(String(512), default=None)
     ech_query_strategy: Mapped[str | None] = mapped_column(String(8), default=None)
     vless_route: Mapped[str | None] = mapped_column(String(4), default=None)

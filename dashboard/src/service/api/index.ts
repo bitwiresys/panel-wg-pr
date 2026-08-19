@@ -1817,6 +1817,20 @@ export const ProxyHostALPN = {
   h3: 'h3',
 } as const
 
+export type HostPlatform = (typeof HostPlatform)[keyof typeof HostPlatform]
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const HostPlatform = {
+  android: 'android',
+  ios: 'ios',
+  windows: 'windows',
+  macos: 'macos',
+  linux: 'linux',
+  appletv: 'appletv',
+  androidtv: 'androidtv',
+  unknown: 'unknown',
+} as const
+
 export type Platform = (typeof Platform)[keyof typeof Platform]
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
@@ -2933,6 +2947,8 @@ export type CreateHostEchConfigList = string | null
 
 export type CreateHostStatus = UserStatus[] | null
 
+export type CreateHostDeviceOs = HostPlatform[] | null
+
 export type CreateHostVlessRoute = string | null
 
 export type CreateHostNoiseSettings = NoiseSettings | null
@@ -2987,6 +3003,7 @@ export interface CreateHost {
   vless_route?: CreateHostVlessRoute
   priority: number
   status?: CreateHostStatus
+  device_os?: CreateHostDeviceOs
   ech_config_list?: CreateHostEchConfigList
   ech_query_strategy?: CreateHostEchQueryStrategy
   pinned_peer_cert_sha256?: CreateHostPinnedPeerCertSha256
@@ -3450,6 +3467,8 @@ export type BaseHostEchConfigList = string | null
 
 export type BaseHostStatus = UserStatus[] | null
 
+export type BaseHostDeviceOs = HostPlatform[] | null
+
 export type BaseHostVlessRoute = string | null
 
 export type BaseHostNoiseSettings = NoiseSettings | null
@@ -3504,6 +3523,7 @@ export interface BaseHost {
   vless_route?: BaseHostVlessRoute
   priority: number
   status?: BaseHostStatus
+  device_os?: BaseHostDeviceOs
   ech_config_list?: BaseHostEchConfigList
   ech_query_strategy?: BaseHostEchQueryStrategy
   pinned_peer_cert_sha256?: BaseHostPinnedPeerCertSha256

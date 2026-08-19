@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.db.models import ProxyHostALPN, ProxyHostFingerprint, ProxyHostSecurity, UserStatus
+from app.db.models import HostPlatform, ProxyHostALPN, ProxyHostFingerprint, ProxyHostSecurity, UserStatus
 
 from .validators import ListValidator, StringArrayValidator
 
@@ -588,6 +588,7 @@ class BaseHost(BaseModel):
     vless_route: str | None = Field(default=None, pattern=r"^$|^[0-9a-fA-F]{4}$")
     priority: int
     status: set[UserStatus] | None = Field(default_factory=set)
+    device_os: set[HostPlatform] | None = Field(default_factory=set)
     ech_config_list: str | None = Field(default=None)
     ech_query_strategy: ECHQueryStrategy | None = Field(default=None)
     pinned_peer_cert_sha256: str | None = Field(default=None)
