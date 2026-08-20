@@ -1102,6 +1102,44 @@ export interface UserIPList {
 
 export type UserIPListAllNodes = { [key: string]: UserIPList | null }
 
+export type UserIPRankingEntryIps = { [key: string]: number }
+
+/**
+ * One user's online IPs (unioned across all nodes) and current traffic usage
+ */
+export interface UserIPRankingEntry {
+  user_id: number
+  username: string
+  ips: UserIPRankingEntryIps
+  distinct_ip_count: number
+  used_traffic: number
+}
+
+export type UserIPRankingListUpdatedAt = string | null
+
+/**
+ * Users ranked by distinct online-IP count, most first
+ */
+export interface UserIPRankingList {
+  users: UserIPRankingEntry[]
+  updated_at: UserIPRankingListUpdatedAt
+  total?: number
+  skipped_node_count?: number
+}
+
+export type GetUsersRankedByIpCountParamsStatus = UserStatus | UserStatus[] | null
+
+export type GetUsersRankedByIpCountParams = {
+  offset?: number | null
+  limit?: number | null
+  admin_ids?: number[] | null
+  group?: number[] | null
+  status?: GetUsersRankedByIpCountParamsStatus
+  ip_count_min?: number | null
+  ip_count_max?: number | null
+  node_ids?: number[] | null
+}
+
 export type UserHWIDResponseDeviceModel = string | null
 
 export type UserHWIDResponseOsVersion = string | null
@@ -10285,6 +10323,69 @@ export function useUserOnlineIpListAllNodes<TData = Awaited<ReturnType<typeof us
   options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof userOnlineIpListAllNodes>>, TError, TData>> },
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getUserOnlineIpListAllNodesQueryOptions(userId, options)
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+
+  query.queryKey = queryOptions.queryKey
+
+  return query
+}
+
+/**
+ * Rank users by distinct concurrent online-IP count, most first.
+ * @summary Users Ranked By Ip Count
+ */
+export const usersRankedByIpCount = (params?: GetUsersRankedByIpCountParams, signal?: AbortSignal) => {
+  return orvalFetcher<UserIPRankingList>({ url: `/api/node/online_stats/ranked_by_ip_count`, method: 'GET', params, signal })
+}
+
+export const getUsersRankedByIpCountQueryKey = (params?: GetUsersRankedByIpCountParams) => {
+  return [`/api/node/online_stats/ranked_by_ip_count`, ...(params ? [params] : [])] as const
+}
+
+export const getUsersRankedByIpCountQueryOptions = <TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
+  params?: GetUsersRankedByIpCountParams,
+  options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> },
+) => {
+  const { query: queryOptions } = options ?? {}
+
+  const queryKey = queryOptions?.queryKey ?? getUsersRankedByIpCountQueryKey(params)
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof usersRankedByIpCount>>> = ({ signal }) => usersRankedByIpCount(params, signal)
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData> & { queryKey: DataTag<QueryKey, TData, TError> }
+}
+
+export type UsersRankedByIpCountQueryResult = NonNullable<Awaited<ReturnType<typeof usersRankedByIpCount>>>
+export type UsersRankedByIpCountQueryError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>
+
+export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
+  params: undefined | GetUsersRankedByIpCountParams,
+  options: {
+    query: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> &
+      Pick<DefinedInitialDataOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>, 'initialData'>
+  },
+): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
+  params?: GetUsersRankedByIpCountParams,
+  options?: {
+    query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> &
+      Pick<UndefinedInitialDataOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>, 'initialData'>
+  },
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
+  params?: GetUsersRankedByIpCountParams,
+  options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> },
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
+/**
+ * @summary Users Ranked By Ip Count
+ */
+
+export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
+  params?: GetUsersRankedByIpCountParams,
+  options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> },
+): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+  const queryOptions = getUsersRankedByIpCountQueryOptions(params, options)
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 

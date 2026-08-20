@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from PasarGuardNodeBridge import NodeAPIError, PasarGuardNode
@@ -25,8 +26,8 @@ from app.db.crud.node import (
     reset_node_usage,
     update_node_status,
 )
-from app.db.crud.user import get_user_by_id, get_user_count_metric_stats
-from app.db.models import Node, NodeStatus
+from app.db.crud.user import get_user_by_id, get_user_count_metric_stats, get_users
+from app.db.models import Node, NodeStatus, UserStatus
 from app.models.admin import AdminDetails
 from app.models.core import CoreType
 from app.models.node import (
@@ -50,6 +51,10 @@ from app.models.node import (
     UsageTable,
     UserIPList,
     UserIPListAll,
+    UserIPRankingEntry,
+    UserIPRankingList,
+    UserIPRankingQuery,
+    UserOnlineIPsSnapshot,
 )
 from app.models.stats import (
     NodeOutboundsLatencyResponse,
@@ -60,6 +65,7 @@ from app.models.stats import (
     UserCountMetricStatsList,
     validate_user_count_metric_scope,
 )
+from app.models.user import UserListQuery
 from app.nats.node_rpc import node_nats_client
 from app.node import core_users, node_manager
 from app.operation import BaseOperation, OperatorType
@@ -92,6 +98,7 @@ class NodeOperation(BaseOperation):
             self._update_geofiles_impl = self._update_geofiles_local
             self._get_logs_impl = self._get_logs_local
             self._restart_all_impl = self._restart_all_nodes_local
+            self._get_users_ip_ranking_impl = self._get_users_ip_ranking_local
         else:
             self._update_node_impl = self._update_node_remote
             self._remove_node_impl = self._remove_node_remote
@@ -110,6 +117,7 @@ class NodeOperation(BaseOperation):
             self._update_geofiles_impl = self._update_geofiles_remote
             self._get_logs_impl = self._get_logs_remote
             self._restart_all_impl = self._restart_all_nodes_remote
+            self._get_users_ip_ranking_impl = self._get_users_ip_ranking_remote
 
     async def get_db_nodes(
         self,
@@ -509,6 +517,12 @@ class NodeOperation(BaseOperation):
     async def get_user_ip_list_all_nodes(self, db: AsyncSession, user_id: int) -> UserIPListAll:
         return await self._get_user_ip_list_all_impl(db, user_id)
 
+    async def get_users_online_ips(self, node_ids: list[int] | None = None) -> tuple[dict[int, dict[str, int]], int]:
+        return await self._get_users_online_ips(node_ids)
+
+    async def get_users_ip_ranking(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
+        return await self._get_users_ip_ranking_impl(db, query)
+
     async def _get_node_user_ip_list_safe(self, node_id: int, email: str) -> dict[str, int] | None:
         """Wrapper method that returns None instead of raising exceptions"""
         try:
@@ -524,6 +538,42 @@ class NodeOperation(BaseOperation):
         except NodeAPIError as e:
             if e.code != 404:
                 logger.error(f"Error getting IP list for user {email} on node {node_id}: {e}")
+            return None
+
+    async def _get_node_users_ip_list_bulk_safe(self, node_id: int) -> dict[str, dict[str, int]] | None:
+        """Bulk per-node online-IP fetch, keyed by user email.
+
+        GetUsersOnlineIpListStats has no wrapper in the published
+        pasarguard-node-bridge yet, so this calls the low-level gRPC stub
+        directly (bypassing PasarGuardNode's hand-written per-user method).
+        Only grpclib-transport nodes expose that stub; REST-transport nodes
+        return None here and are simply skipped by callers.
+
+        TODO(bridge): remove this and call the real wrapper once
+        pasarguard-node-bridge publishes GetUsersOnlineIpListStats. The
+        matching local stub regeneration lives in
+        scripts/regenerate_node_bridge_proto.py -- remove that too.
+        """
+        try:
+            node = await node_manager.get_node(node_id)
+            if node is None:
+                return None
+
+            client = getattr(node, "_client", None)
+            handle_request = getattr(node, "_handle_grpc_request", None)
+            if client is None or handle_request is None or not hasattr(client, "GetUsersOnlineIpListStats"):
+                return None
+
+            response = await handle_request(method=client.GetUsersOnlineIpListStats, request=service.Empty())
+            if response is None:
+                return None
+
+            return {email: dict(stats.ips) for email, stats in response.users.items()}
+        except NodeAPIError as e:
+            # 404: node not found; 501: node predates this RPC (old node binary) --
+            # both mean "skip this node", not an error worth logging.
+            if e.code not in (404, 501):
+                logger.error(f"Error getting bulk IP list for node {node_id}: {e}")
             return None
 
     async def sync_node_users(self, db: AsyncSession, node_id: int, flush_users: bool = False) -> NodeResponse:
@@ -903,6 +953,109 @@ class NodeOperation(BaseOperation):
             return UserIPListAll.model_validate(data)
         except RuntimeError as exc:
             await self.handle_rpc_error(exc)
+
+    async def _get_users_online_ips(self, node_ids: list[int] | None = None) -> tuple[dict[int, dict[str, int]], int]:
+        """Online IPs per user (ip -> last-seen unix timestamp), unioned across healthy nodes.
+
+        Used to rank users by concurrent-device/IP count (e.g. to spot
+        credential sharing). Nodes that don't support the bulk RPC yet
+        (REST-transport, or an older node binary) are skipped rather than
+        failing the whole ranking -- see _get_node_users_ip_list_bulk_safe.
+        If node_ids is given, only those nodes are queried.
+
+        Returns (ips_by_user, skipped_node_count) -- the caller surfaces the
+        skip count so an admin isn't misled by a ranking that's silently
+        missing data from nodes that couldn't be queried.
+        """
+        nodes = await node_manager.get_healthy_nodes()
+        if node_ids is not None:
+            wanted = set(node_ids)
+            nodes = [(node_id, node) for node_id, node in nodes if node_id in wanted]
+        ip_tasks = {
+            node_id: asyncio.create_task(self._get_node_users_ip_list_bulk_safe(node_id)) for node_id, _ in nodes
+        }
+        await asyncio.gather(*ip_tasks.values(), return_exceptions=True)
+
+        ips_by_user: dict[int, dict[str, int]] = {}
+        skipped_node_count = 0
+        for node_id, task in ip_tasks.items():
+            if task.exception():
+                logger.error(f"Error getting bulk IP list for node {node_id}: {task.exception()}")
+                skipped_node_count += 1
+                continue
+            node_result = task.result()
+            if node_result is None:
+                skipped_node_count += 1
+                continue
+            for email, ips in node_result.items():
+                try:
+                    user_id = int(email)
+                except ValueError:
+                    continue
+                user_ips = ips_by_user.setdefault(user_id, {})
+                for ip, last_seen in ips.items():
+                    if last_seen > user_ips.get(ip, 0):
+                        user_ips[ip] = last_seen
+
+        return ips_by_user, skipped_node_count
+
+    async def _resolve_ip_ranking(
+        self,
+        db: AsyncSession,
+        ips_by_user: dict[int, dict[str, int]],
+        updated_at,
+        query: UserIPRankingQuery,
+        skipped_node_count: int = 0,
+    ) -> UserIPRankingList:
+        counts = {
+            user_id: len(ips)
+            for user_id, ips in ips_by_user.items()
+            if (query.ip_count_min is None or len(ips) >= query.ip_count_min)
+            and (query.ip_count_max is None or len(ips) <= query.ip_count_max)
+        }
+
+        ranked_ids = sorted(counts, key=lambda user_id: counts[user_id], reverse=True)
+        status = [query.status] if isinstance(query.status, UserStatus) else query.status
+        users = await get_users(
+            db, UserListQuery(ids=ranked_ids, admin_ids=query.admin_ids, group_ids=query.group_ids, status=status)
+        )
+        users_by_id = {user.id: user for user in users}
+
+        visible_ids = [user_id for user_id in ranked_ids if user_id in users_by_id]
+        offset = query.offset or 0
+        limit = query.limit if query.limit is not None else len(visible_ids)
+        page_ids = visible_ids[offset : offset + limit]
+
+        entries = [
+            UserIPRankingEntry(
+                user_id=user_id,
+                username=users_by_id[user_id].username,
+                ips=ips_by_user[user_id],
+                distinct_ip_count=counts[user_id],
+                used_traffic=users_by_id[user_id].used_traffic,
+            )
+            for user_id in page_ids
+        ]
+
+        return UserIPRankingList(
+            users=entries, updated_at=updated_at, total=len(visible_ids), skipped_node_count=skipped_node_count
+        )
+
+    async def _get_users_ip_ranking_local(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
+        ips_by_user, skipped_node_count = await self._get_users_online_ips(query.node_ids)
+        return await self._resolve_ip_ranking(db, ips_by_user, datetime.now(UTC), query, skipped_node_count)
+
+    async def _get_users_ip_ranking_remote(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
+        try:
+            data = await node_nats_client.request("get_users_ip_ranking", {"node_ids": query.node_ids})
+        except RuntimeError as exc:
+            await self.handle_rpc_error(exc)
+            return
+
+        snapshot = UserOnlineIPsSnapshot.model_validate(data)
+        return await self._resolve_ip_ranking(
+            db, snapshot.users, snapshot.computed_at, query, snapshot.skipped_node_count
+        )
 
     async def _sync_node_users_local(self, db: AsyncSession, node_id: int, flush_users: bool) -> NodeResponse:
         db_node = await self.get_validated_node(db, node_id=node_id)

@@ -29,6 +29,8 @@ from app.models.node import (
     UsageTable,
     UserIPList,
     UserIPListAll,
+    UserIPRankingList,
+    UserIPRankingQuery,
 )
 from app.models.stats import (
     NodeOutboundsLatencyResponse,
@@ -53,6 +55,7 @@ from .dependencies import (
     get_node_simple_list_query,
     get_node_stats_period_query,
     get_node_usage_query,
+    get_user_ip_ranking_query,
 )
 
 node_operator = NodeOperation(operator_type=OperatorType.API)
@@ -363,6 +366,24 @@ async def user_online_ip_list_all_nodes(
 ):
     """Retrieve user ips from all nodes."""
     return await node_operator.get_user_ip_list_all_nodes(db=db, user_id=user_id)
+
+
+@router.get("/online_stats/ranked_by_ip_count", response_model=UserIPRankingList)
+async def users_ranked_by_ip_count(
+    query: Annotated[UserIPRankingQuery, Depends(get_user_ip_ranking_query)],
+    db: AsyncSession = Depends(get_db),
+    _: AdminDetails = Depends(require_permission("nodes", "stats")),
+):
+    """Rank users by distinct concurrent online-IP count, most first.
+
+    Each entry also includes the user's online IPs (with last-seen timestamps)
+    and current traffic usage. IPs are computed live from all healthy nodes on
+    each request (or a subset via node_ids); traffic comes from the database
+    (already tracked by the usage-recording job, not re-fetched from nodes).
+    Supports the same admin/group/status filters as other user list endpoints,
+    plus ip_count_min/ip_count_max and node_ids.
+    """
+    return await node_operator.get_users_ip_ranking(db=db, query=query)
 
 
 @router.get("/{node_id}/online_stats/{user_id}", response_model=dict[int, int])
