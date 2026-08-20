@@ -241,11 +241,29 @@ async def remove_groups_from_users(
     return users, count_effctive_users
 
 
+def _expire_target_filter(bulk_model: BulkUserExpire, final_filter):
+    """
+    Narrow the bulk-expire filter to users the requested anchor can actually act on.
+
+    "expire" extends each user's own expire date, so a user without one has no base to extend
+    and is skipped. Every other anchor resolves to an absolute instant that applies just as well
+    to a user who never had an expire date, and BulkUserExpire documents those as affecting
+    "every matched user, regardless of their current expire date" -- so unlimited users are
+    included and get initialized.
+
+    On-hold users are excluded either way. They also carry expire=None, but their expiry is
+    governed by on_hold_expire_duration: start_user_expire() overwrites expire with
+    now + on_hold_expire_duration when they first come online, so anything written here would be
+    counted in the dry run and then silently discarded on activation.
+    """
+    if bulk_model.anchor == "expire":
+        return and_(final_filter, User.expire.isnot(None))
+    return and_(final_filter, User.status != UserStatus.on_hold)
+
+
 async def count_bulk_expire_targets(db: AsyncSession, bulk_model: BulkUserExpire) -> int:
-    final_filter = _create_final_filter(bulk_model)
-    return (
-        await db.execute(select(func.count(User.id)).where(and_(final_filter, User.expire.isnot(None))))
-    ).scalar_one_or_none() or 0
+    final_filter = _expire_target_filter(bulk_model, _create_final_filter(bulk_model))
+    return (await db.execute(select(func.count(User.id)).where(final_filter))).scalar_one_or_none() or 0
 
 
 async def count_bulk_datalimit_targets(db: AsyncSession, bulk_model: BulkUser) -> int:
@@ -318,11 +336,9 @@ async def update_users_expire(
     """
     Bulk update user expiration dates and return list of User objects where status changed.
     """
-    final_filter = _create_final_filter(bulk_model)
+    final_filter = _expire_target_filter(bulk_model, _create_final_filter(bulk_model))
 
-    count_effctive_users = (
-        await db.execute(select(func.count(User.id)).where(and_(final_filter, User.expire.isnot(None))))
-    ).scalar_one_or_none() or 0
+    count_effctive_users = (await db.execute(select(func.count(User.id)).where(final_filter))).scalar_one_or_none() or 0
     current_time = dt.now(UTC)
 
     if bulk_model.anchor == "expire":
@@ -343,9 +359,7 @@ async def update_users_expire(
     )
 
     # Get IDs of users whose status will change
-    result = await db.execute(
-        select(User.id).where(and_(final_filter, User.expire.isnot(None), status_change_conditions))
-    )
+    result = await db.execute(select(User.id).where(and_(final_filter, status_change_conditions)))
     status_changed_user_ids = [row[0] for row in result.fetchall()]
 
     # Perform the update
@@ -355,9 +369,7 @@ async def update_users_expire(
     ]
 
     await db.execute(
-        update(User)
-        .where(and_(final_filter, User.expire.isnot(None)))
-        .values(expire=new_expire, status=case(*status_cases, else_=User.status))
+        update(User).where(final_filter).values(expire=new_expire, status=case(*status_cases, else_=User.status))
     )
     await db.commit()
 
