@@ -81,7 +81,11 @@ def _serialize_user_for_node(
         proxy_kwargs["hysteria_auth"] = user_settings.get("hysteria", {}).get("auth")
 
     proxy = create_proxy(**proxy_kwargs)
-    if pre_shared_key := wireguard_settings.get("pre_shared_key") if ProxyProtocol.wireguard in allowed_protocols else None:
+    if (
+        pre_shared_key := wireguard_settings.get("pre_shared_key")
+        if ProxyProtocol.wireguard in allowed_protocols
+        else None
+    ):
         try:
             proxy.wireguard.pre_shared_key = pre_shared_key
         except AttributeError as exc:

@@ -42,6 +42,7 @@ USER_ADMIN_LOOKUP_BATCH_SIZE = 1_000
 _thread_pool = None
 _thread_pool_lock = asyncio.Lock()
 
+
 async def _get_thread_pool():
     """Get or create the thread pool executor (thread-safe)."""
     global _thread_pool
@@ -509,7 +510,7 @@ def _process_users_stats_response(stats_response):
     for uid, value in params.items():
         try:
             validated_params.append({"uid": int(uid), "value": value})
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             invalid_uids.append(uid)
 
     return validated_params, invalid_uids
@@ -699,9 +700,7 @@ async def _record_user_usages_impl():
                 usage_coefficient[node_id] = data.get("usage_coefficient", 1) if data else 1.0
 
         # Gather stats directly - asyncio.gather accepts coroutines, no need for create_task
-        stats_results = await asyncio.gather(
-            *[get_users_stats(node) for _, node in nodes], return_exceptions=True
-        )
+        stats_results = await asyncio.gather(*[get_users_stats(node) for _, node in nodes], return_exceptions=True)
         api_params = {}
         for i, result in enumerate(stats_results):
             node_id = nodes[i][0]
