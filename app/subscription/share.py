@@ -15,7 +15,6 @@ from app.models.user import UsersResponseWithInbounds
 from app.settings import subscription_settings
 from app.subscription.client_templates import subscription_client_templates, subscription_xray_templates
 from app.utils.system import readable_size
-from config import wireguard_settings
 
 from . import (
     ClashConfiguration,
@@ -319,6 +318,7 @@ async def process_host(
     if isinstance(inbound.tls_config.sni, list) and inbound.tls_config.sni:
         sni = random.choice(inbound.tls_config.sni)
     sni = sni.replace("*", salt)
+    sni = sni.format_map(format_variables) if sni else ""
 
     req_host = ""
     host_list = inbound.transport_config.host
@@ -450,9 +450,6 @@ async def process_inbounds_and_tags(
         return xray_template_overrides.get(template_id)
 
     for host_data in hosts:
-        if host_data.protocol == "wireguard" and not wireguard_settings.enabled:
-            continue
-
         result = await process_host(host_data, format_variables, user.inbounds, proxy_settings, custom_variables)
         if not result:
             continue

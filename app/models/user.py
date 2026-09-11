@@ -255,6 +255,9 @@ class UserListQuery(PaginatedAdminGroupStatusQuery):
     username: list[str] | None = Field(default=None)
     usernames: list[str] | None = Field(default=None)
     owner: list[str] | None = Field(default=None, alias="admin")
+    admin_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("admin_ids", "admin_id"))
+    group_ids: list[int] | None = Field(default=None, alias="group")
+    no_group: bool = Field(default=False)
     search: str | None = Field(default=None)
     sort: list[UserSortOption] = Field(default_factory=list)
     proxy_id: str | None = Field(default=None)
@@ -271,6 +274,7 @@ class UserListQuery(PaginatedAdminGroupStatusQuery):
     no_data_limit: bool = Field(default=False)
     no_expire: bool = Field(default=False)
     load_sub: bool = Field(default=False)
+    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("sort", mode="before")
     @classmethod
@@ -459,26 +463,10 @@ class BulkUsersProxy(BulkUserFilter):
     method: ShadowsocksMethods | None = Field(default=None)
 
 
-class BulkWireGuardPeerIPs(BulkUserFilter):
-    """Re-seat WireGuard peer IPs (same scoping as BulkUser: users, admins, group_ids, status)."""
-
-    confirm: bool = False
-    replace_all: bool = False
-
-
 class BulkOperationDryRunResponse(BaseModel):
     """Preview for bulk user/group operations (no DB writes)."""
 
     dry_run: bool = True
-    affected_users: int
-
-
-class WireGuardPeerIPsReallocateResponse(BaseModel):
-    wireguard_inbound_tags: int
-    candidates: int
-    updated: int
-    dry_run: bool
-    sample_usernames: list[str]
     affected_users: int
 
 

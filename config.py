@@ -93,6 +93,15 @@ class NatsSettings(EnvSettings):
     core_pubsub_channel: str = Field(default="core_hosts_updates", validation_alias="CORE_PUBSUB_CHANNEL")
     host_pubsub_channel: str = Field(default="host_manager_updates", validation_alias="HOST_PUBSUB_CHANNEL")
     telegram_kv_bucket: str = Field(default="pasarguard_telegram", validation_alias="NATS_TELEGRAM_KV_BUCKET")
+    node_user_sync_kv_bucket: str = Field(
+        default="pasarguard_node_user_sync", validation_alias="NATS_NODE_USER_SYNC_KV_BUCKET"
+    )
+    node_lifecycle_kv_bucket: str = Field(
+        default="pasarguard_node_lifecycle", validation_alias="NATS_NODE_LIFECYCLE_KV_BUCKET"
+    )
+    scheduler_leader_kv_bucket: str = Field(
+        default="pasarguard_scheduler_leader", validation_alias="NATS_SCHEDULER_LEADER_KV_BUCKET"
+    )
     notification_stream: str = Field(default="NOTIFICATIONS", validation_alias="NATS_NOTIFICATION_STREAM")
     notification_subject: str = Field(default="notifications.queue", validation_alias="NATS_NOTIFICATION_SUBJECT")
     notification_consumer: str = Field(default="notification_workers", validation_alias="NATS_NOTIFICATION_CONSUMER")
@@ -201,12 +210,6 @@ class FeatureSettings(EnvSettings):
     stop_nodes_on_shutdown: bool = Field(default=True, validation_alias="STOP_NODES_ON_SHUTDOWN")
 
 
-class WireGuardSettings(EnvSettings):
-    enabled: bool = Field(default=True, validation_alias="WIREGUARD_ENABLED")
-    global_pool: str = Field(default="10.0.0.0/8", validation_alias="WIREGUARD_GLOBAL_POOL")
-    reserved: str = Field(default="10.0.0.0/31", validation_alias="WIREGUARD_RESERVED")
-
-
 database_settings = DatabaseSettings()
 server_settings = ServerSettings()
 dashboard_settings = DashboardSettings()
@@ -222,7 +225,6 @@ auth_settings = AuthSettings()
 usage_settings = UsageSettings()
 job_settings = JobSettings()
 feature_settings = FeatureSettings()
-wireguard_settings = WireGuardSettings()
 
 if not database_settings.is_postgresql:
     usage_settings.enable_recording_nodes_stats = False

@@ -10,6 +10,9 @@ export default defineConfig({
   clearScreen: false,
   server: {
     host: true,
+    watch: {
+      ignored: ['**/build/**'],
+    },
   },
   build: {
     outDir: 'build',
@@ -128,7 +131,7 @@ export default defineConfig({
     alias: [
       {
         find: '@',
-        replacement: path.resolve(__dirname, 'src'),
+        replacement: path.resolve(import.meta.dirname, 'src'),
       },
       {
         find: 'react',
@@ -141,7 +144,19 @@ export default defineConfig({
     ],
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', '@tanstack/react-query'],
+    holdUntilCrawlEnd: false,
+    entries: ['index.html'],
+    include: [
+      'react',
+      'react-dom',
+      'react/jsx-runtime',
+      'react/jsx-dev-runtime',
+      '@tanstack/react-query',
+      'dayjs',
+      'lodash.debounce',
+      'react-use-websocket',
+    ],
+    exclude: ['monaco-editor', '@monaco-editor/react', 'ace-builds', 'react-ace', 'lucide-react'],
   },
   plugins: [
     tailwindcss(),

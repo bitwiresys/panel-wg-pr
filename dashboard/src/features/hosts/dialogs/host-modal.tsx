@@ -216,8 +216,8 @@ const NoiseItem = memo<NoiseItemProps>(({ index, form, onRemove, onDuplicate, t 
           </Button>
         </div>
       </div>
-      {/* Row 2: packet, delay, rand_range */}
-      <div className="grid grid-cols-3 gap-2 pl-7">
+      {/* Row 2: packet, delay */}
+      <div className="grid grid-cols-2 gap-2 pl-7">
         <FormField
           control={form.control}
           name={`noise_settings.xray.${index}.packet`}
@@ -237,18 +237,6 @@ const NoiseItem = memo<NoiseItemProps>(({ index, form, onRemove, onDuplicate, t 
             <FormItem>
               <FormControl>
                 <Input placeholder={t('hostsDialog.noise.delayPlaceholder')} {...field} value={field.value || ''} className="h-8" />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name={`noise_settings.xray.${index}.rand_range`}
-          render={({ field }) => (
-            <FormItem>
-              <FormControl>
-                <Input placeholder={t('hostsDialog.noise.randRangePlaceholder')} {...field} value={field.value || ''} className="h-8" />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -603,7 +591,6 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
           packet: '',
           delay: '',
           apply_to: 'ip',
-          rand_range: '',
         },
       ],
       {
@@ -981,9 +968,7 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
                         value={parsedXrayTemplateId != null ? String(parsedXrayTemplateId) : XRAY_TEMPLATE_INBOUND_DEFAULT_VALUE}
                         onValueChange={value => {
                           if (value === XRAY_TEMPLATE_INBOUND_DEFAULT_VALUE) {
-                            // Clear the whole optional object so RHF does not keep `{ xray: undefined }`,
-                            // which can leave the UI stuck on the previous template id.
-                            form.setValue('subscription_templates', undefined, {
+                            form.setValue('subscription_templates.xray', null, {
                               shouldDirty: true,
                               shouldTouch: true,
                               shouldValidate: true,
@@ -1581,10 +1566,20 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
                               const infoContent = (
                                 <div className="space-y-1.5">
                                   <p className="text-muted-foreground text-[11px]">{t('hostsDialog.sni.info')}</p>
+                                  <p className="text-muted-foreground text-[11px]">{t('hostsDialog.sni.multiHost')}</p>
+                                  <p className="text-muted-foreground text-[11px]">{t('hostsDialog.sni.wildcard')}</p>
                                 </div>
                               )
 
-                              return <ArrayInput field={field} placeholder={t('hostsDialog.sniPlaceholder')} label={t('hostsDialog.sni')} infoContent={infoContent} />
+                              return (
+                                <ArrayInput
+                                  field={field}
+                                  placeholder={t('hostsDialog.sniPlaceholder')}
+                                  label={t('hostsDialog.sni')}
+                                  infoContent={infoContent}
+                                  customVariablesTrigger={<CustomVariablesPopover />}
+                                />
+                              )
                             }}
                           />
                         </div>

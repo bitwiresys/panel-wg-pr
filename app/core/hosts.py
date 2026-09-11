@@ -24,7 +24,7 @@ from app.models.subscription import (
     WebSocketTransportConfig,
     XHTTPTransportConfig,
 )
-from app.nats import is_nats_enabled
+from app.nats import is_multi_worker, is_nats_enabled
 from app.nats.client import setup_nats_kv
 from app.nats.message import MessageTopic
 from app.nats.router import router
@@ -71,7 +71,7 @@ async def _prepare_subscription_inbound_data(
     fms = final_mask_settings
     if final_mask_settings:
         if isinstance(final_mask_settings, FinalMask):
-            fms = final_mask_settings.model_dump(by_alias=True)
+            fms = final_mask_settings.model_dump(by_alias=True, exclude_none=True)
         finalmask_link = json.dumps(fms, separators=(",", ":"))
 
     if protocol == "wireguard":
@@ -428,7 +428,7 @@ class HostManager:
         self._hosts = {}
         self._lock = Lock()
         self._nats_enabled = is_nats_enabled()
-        self._multi_worker = runtime_settings.role.requires_nats
+        self._multi_worker = is_multi_worker()
         self._nc: nats.NATS | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None

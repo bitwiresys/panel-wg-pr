@@ -3,7 +3,7 @@
  * Do not edit manually.
  * PasarGuardAPI
  * Unified GUI Censorship Resistant Solution
- * OpenAPI spec version: 5.2.1
+ * OpenAPI spec version: 5.3.0
  */
 import { useMutation, useQuery } from '@tanstack/react-query'
 import type {
@@ -133,14 +133,15 @@ export type GetUsersSimpleParams = {
 export type GetUsersParams = {
   offset?: number | null
   limit?: number | null
+  admin_ids?: number[] | null
+  group?: number[] | null
+  status?: UserStatus | UserStatus[] | null
   ids?: number[] | null
   username?: string[] | null
   usernames?: string[] | null
   admin?: string[] | null
-  admin_ids?: number[] | null
-  group?: number[] | null
+  no_group?: boolean
   search?: string | null
-  status?: UserStatus | UserStatus[] | null
   sort?: string | null
   proxy_id?: string | null
   data_limit_reset_strategy?: DataLimitResetStrategy | DataLimitResetStrategy[] | null
@@ -198,6 +199,17 @@ export type ClearUsageDataParams = {
 }
 
 export type UserOnlineStats200 = { [key: string]: number }
+
+export type UsersRankedByIpCountParams = {
+  offset?: number | null
+  limit?: number | null
+  admin_ids?: number[] | null
+  group?: number[] | null
+  status?: UserStatus | UserStatus[] | null
+  ip_count_min?: number | null
+  ip_count_max?: number | null
+  node_ids?: number[] | null
+}
 
 export type RealtimeNodesStats200 = { [key: string]: NodeRealtimeStats | null }
 
@@ -415,13 +427,6 @@ export type XrayMuxSettingsOutputXudpConcurrency = number | null
 
 export type XrayMuxSettingsOutputConcurrency = number | null
 
-export interface XrayMuxSettingsOutput {
-  enabled?: boolean
-  concurrency?: XrayMuxSettingsOutputConcurrency
-  xudpConcurrency?: XrayMuxSettingsOutputXudpConcurrency
-  xudpProxyUDP443?: Xudp
-}
-
 export type XrayMuxSettingsInputXudpConcurrency = number | null
 
 export type XrayMuxSettingsInputConcurrency = number | null
@@ -454,6 +459,13 @@ export const Xudp = {
   allow: 'allow',
   skip: 'skip',
 } as const
+
+export interface XrayMuxSettingsOutput {
+  enabled?: boolean
+  concurrency?: XrayMuxSettingsOutputConcurrency
+  xudpConcurrency?: XrayMuxSettingsOutputXudpConcurrency
+  xudpProxyUDP443?: Xudp
+}
 
 export type XMuxSettingsHKeepAlivePeriod = number | null
 
@@ -1084,6 +1096,31 @@ export interface UserModify {
   status?: UserModifyStatus
 }
 
+export type UserIPRankingListUpdatedAt = string | null
+
+export type UserIPRankingEntryIps = { [key: string]: number }
+
+/**
+ * One user's online IPs (unioned across all nodes) and current traffic usage
+ */
+export interface UserIPRankingEntry {
+  user_id: number
+  username: string
+  ips: UserIPRankingEntryIps
+  distinct_ip_count: number
+  used_traffic: number
+}
+
+/**
+ * Users ranked by distinct online-IP count, most first
+ */
+export interface UserIPRankingList {
+  users: UserIPRankingEntry[]
+  updated_at: UserIPRankingListUpdatedAt
+  total?: number
+  skipped_node_count?: number
+}
+
 /**
  * User IP lists for all nodes
  */
@@ -1101,44 +1138,6 @@ export interface UserIPList {
 }
 
 export type UserIPListAllNodes = { [key: string]: UserIPList | null }
-
-export type UserIPRankingEntryIps = { [key: string]: number }
-
-/**
- * One user's online IPs (unioned across all nodes) and current traffic usage
- */
-export interface UserIPRankingEntry {
-  user_id: number
-  username: string
-  ips: UserIPRankingEntryIps
-  distinct_ip_count: number
-  used_traffic: number
-}
-
-export type UserIPRankingListUpdatedAt = string | null
-
-/**
- * Users ranked by distinct online-IP count, most first
- */
-export interface UserIPRankingList {
-  users: UserIPRankingEntry[]
-  updated_at: UserIPRankingListUpdatedAt
-  total?: number
-  skipped_node_count?: number
-}
-
-export type GetUsersRankedByIpCountParamsStatus = UserStatus | UserStatus[] | null
-
-export type GetUsersRankedByIpCountParams = {
-  offset?: number | null
-  limit?: number | null
-  admin_ids?: number[] | null
-  group?: number[] | null
-  status?: GetUsersRankedByIpCountParamsStatus
-  ip_count_min?: number | null
-  ip_count_max?: number | null
-  node_ids?: number[] | null
-}
 
 export type UserHWIDResponseDeviceModel = string | null
 
@@ -1546,6 +1545,12 @@ export type SettingsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | 
 
 export type SettingsPermissionsUpdate = boolean | SettingsPermissionsUpdateAnyOf | null
 
+export interface SettingsPermissions {
+  read?: SettingsPermissionsRead
+  read_general?: SettingsPermissionsReadGeneral
+  update?: SettingsPermissionsUpdate
+}
+
 export type SettingsPermissionsReadGeneralAnyOf = { [key: string]: PermissionScope | number }
 
 export type SettingsPermissionsReadGeneral = boolean | SettingsPermissionsReadGeneralAnyOf | null
@@ -1553,12 +1558,6 @@ export type SettingsPermissionsReadGeneral = boolean | SettingsPermissionsReadGe
 export type SettingsPermissionsReadAnyOf = { [key: string]: PermissionScope | number }
 
 export type SettingsPermissionsRead = boolean | SettingsPermissionsReadAnyOf | null
-
-export interface SettingsPermissions {
-  read?: SettingsPermissionsRead
-  read_general?: SettingsPermissionsReadGeneral
-  update?: SettingsPermissionsUpdate
-}
 
 export type RunMethod = (typeof RunMethod)[keyof typeof RunMethod]
 
@@ -1855,20 +1854,6 @@ export const ProxyHostALPN = {
   h3: 'h3',
 } as const
 
-export type HostPlatform = (typeof HostPlatform)[keyof typeof HostPlatform]
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const HostPlatform = {
-  android: 'android',
-  ios: 'ios',
-  windows: 'windows',
-  macos: 'macos',
-  linux: 'linux',
-  appletv: 'appletv',
-  androidtv: 'androidtv',
-  unknown: 'unknown',
-} as const
-
 export type Platform = (typeof Platform)[keyof typeof Platform]
 
 // eslint-disable-next-line @typescript-eslint/no-redeclare
@@ -1930,6 +1915,19 @@ export type NotificationSettingsTelegramChatId = number | null
 
 export type NotificationSettingsTelegramApiToken = string | null
 
+export interface NotificationSettings {
+  notify_telegram?: boolean
+  notify_discord?: boolean
+  telegram_api_token?: NotificationSettingsTelegramApiToken
+  telegram_chat_id?: NotificationSettingsTelegramChatId
+  telegram_topic_id?: NotificationSettingsTelegramTopicId
+  discord_webhook_url?: NotificationSettingsDiscordWebhookUrl
+  channels?: NotificationChannels
+  proxy_url?: NotificationSettingsProxyUrl
+  /** */
+  max_retries: number
+}
+
 export interface NotificationEnable {
   admin?: AdminNotificationEnable
   admin_role?: BaseNotificationEnable
@@ -1942,34 +1940,6 @@ export interface NotificationEnable {
   api_key?: BaseNotificationEnable
   days_left?: boolean
   percentage_reached?: boolean
-}
-
-/**
- * Per-object notification channels
- */
-export interface NotificationChannels {
-  admin?: NotificationChannel
-  admin_role?: NotificationChannel
-  core?: NotificationChannel
-  group?: NotificationChannel
-  host?: NotificationChannel
-  node?: NotificationChannel
-  user?: NotificationChannel
-  user_template?: NotificationChannel
-  api_key?: NotificationChannel
-}
-
-export interface NotificationSettings {
-  notify_telegram?: boolean
-  notify_discord?: boolean
-  telegram_api_token?: NotificationSettingsTelegramApiToken
-  telegram_chat_id?: NotificationSettingsTelegramChatId
-  telegram_topic_id?: NotificationSettingsTelegramTopicId
-  discord_webhook_url?: NotificationSettingsDiscordWebhookUrl
-  channels?: NotificationChannels
-  proxy_url?: NotificationSettingsProxyUrl
-  /** */
-  max_retries: number
 }
 
 export type NotificationChannelDiscordWebhookUrl = string | null
@@ -1985,6 +1955,21 @@ export interface NotificationChannel {
   telegram_chat_id?: NotificationChannelTelegramChatId
   telegram_topic_id?: NotificationChannelTelegramTopicId
   discord_webhook_url?: NotificationChannelDiscordWebhookUrl
+}
+
+/**
+ * Per-object notification channels
+ */
+export interface NotificationChannels {
+  admin?: NotificationChannel
+  admin_role?: NotificationChannel
+  core?: NotificationChannel
+  group?: NotificationChannel
+  host?: NotificationChannel
+  node?: NotificationChannel
+  user?: NotificationChannel
+  user_template?: NotificationChannel
+  api_key?: NotificationChannel
 }
 
 export interface NotFound {
@@ -2139,7 +2124,7 @@ export interface NodeResponse {
   address: string
   port?: number
   api_port?: number
-  /** */
+  /** @minimum 0 */
   usage_coefficient?: number
   connection_type: NodeConnectionType
   server_ca: string
@@ -2229,6 +2214,8 @@ export type NodeModifyKeepAlive = number | null
 
 export type NodeModifyServerCa = string | null
 
+export type NodeModifyConnectionType = NodeConnectionType | null
+
 export type NodeModifyUsageCoefficient = number | null
 
 export type NodeModifyPort = number | null
@@ -2263,12 +2250,25 @@ export interface NodeGeoFilesUpdate {
 
 export type NodeCreateProxyUrl = string | null
 
+export interface NodeCoreUpdate {
+  /** @pattern ^(latest|v?\d+\.\d+\.\d+)$ */
+  core_version?: string
+}
+
+export type NodeConnectionType = (typeof NodeConnectionType)[keyof typeof NodeConnectionType]
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const NodeConnectionType = {
+  grpc: 'grpc',
+  rest: 'rest',
+} as const
+
 export interface NodeCreate {
   name: string
   address: string
   port?: number
   api_port?: number
-  /** */
+  /** @minimum 0 */
   usage_coefficient?: number
   connection_type: NodeConnectionType
   server_ca: string
@@ -2290,21 +2290,6 @@ export interface NodeCreate {
   internal_timeout?: number
   proxy_url?: NodeCreateProxyUrl
 }
-
-export interface NodeCoreUpdate {
-  /** @pattern ^(latest|v?\d+\.\d+\.\d+)$ */
-  core_version?: string
-}
-
-export type NodeConnectionType = (typeof NodeConnectionType)[keyof typeof NodeConnectionType]
-
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const NodeConnectionType = {
-  grpc: 'grpc',
-  rest: 'rest',
-} as const
-
-export type NodeModifyConnectionType = NodeConnectionType | null
 
 export type NextPlanModelExpire = number | null
 
@@ -2410,14 +2395,14 @@ export type HwidsPermissionsDeleteAnyOf = { [key: string]: PermissionScope | num
 
 export type HwidsPermissionsDelete = boolean | HwidsPermissionsDeleteAnyOf | null
 
-export type HwidsPermissionsReadAnyOf = { [key: string]: PermissionScope | number }
-
-export type HwidsPermissionsRead = boolean | HwidsPermissionsReadAnyOf | null
-
 export interface HwidsPermissions {
   read?: HwidsPermissionsRead
   delete?: HwidsPermissionsDelete
 }
+
+export type HwidsPermissionsReadAnyOf = { [key: string]: PermissionScope | number }
+
+export type HwidsPermissionsRead = boolean | HwidsPermissionsReadAnyOf | null
 
 export type HostsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
 
@@ -2436,6 +2421,20 @@ export interface HostsPermissions {
   read?: HostsPermissionsRead
   update?: HostsPermissionsUpdate
 }
+
+export type HostPlatform = (typeof HostPlatform)[keyof typeof HostPlatform]
+
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+export const HostPlatform = {
+  android: 'android',
+  ios: 'ios',
+  windows: 'windows',
+  macos: 'macos',
+  linux: 'linux',
+  appletv: 'appletv',
+  androidtv: 'androidtv',
+  unknown: 'unknown',
+} as const
 
 export interface HostNotificationEnable {
   create?: boolean
@@ -2604,25 +2603,25 @@ export interface Forbidden {
 
 export type FinalMaskXmcSettingsUsernames = string[] | null
 
-export type FinalMaskXmcSettingsProfiles = FinalMaskXmcProfile[] | null
-
 export type FinalMaskXmcSettingsPassword = string | null
 
 export type FinalMaskXmcSettingsHostname = string | null
-
-export interface FinalMaskXmcSettings {
-  hostname?: FinalMaskXmcSettingsHostname
-  password?: FinalMaskXmcSettingsPassword
-  profiles?: FinalMaskXmcSettingsProfiles
-  usernames?: FinalMaskXmcSettingsUsernames
-  [key: string]: unknown
-}
 
 export interface FinalMaskXmcProfile {
   username: string
   uuid: string
   texturesValue: string
   texturesSignature: string
+  [key: string]: unknown
+}
+
+export type FinalMaskXmcSettingsProfiles = FinalMaskXmcProfile[] | null
+
+export interface FinalMaskXmcSettings {
+  hostname?: FinalMaskXmcSettingsHostname
+  password?: FinalMaskXmcSettingsPassword
+  profiles?: FinalMaskXmcSettingsProfiles
+  usernames?: FinalMaskXmcSettingsUsernames
   [key: string]: unknown
 }
 
@@ -2708,9 +2707,9 @@ export interface FinalMaskUdpHop {
   [key: string]: unknown
 }
 
-export type FinalMaskUdpHeaderCustomSettingsServer = XrayNoiseSettings[] | null
+export type FinalMaskUdpHeaderCustomSettingsServer = FinalMaskNoiseItem[] | null
 
-export type FinalMaskUdpHeaderCustomSettingsClient = XrayNoiseSettings[] | null
+export type FinalMaskUdpHeaderCustomSettingsClient = FinalMaskNoiseItem[] | null
 
 export interface FinalMaskUdpHeaderCustomSettings {
   client?: FinalMaskUdpHeaderCustomSettingsClient
@@ -2728,19 +2727,21 @@ export const FinalMaskTcpType = {
   xmc: 'xmc',
 } as const
 
+export type FinalMaskTcpLayerSettingsAnyOf = { [key: string]: unknown }
+
+export type FinalMaskTcpLayerSettings = FinalMaskTcpHeaderCustomSettings | FinalMaskFragmentSettings | FinalMaskSudokuSettings | FinalMaskXmcSettings | FinalMaskTcpLayerSettingsAnyOf
+
 export interface FinalMaskTcpLayer {
   type: FinalMaskTcpType
   settings?: FinalMaskTcpLayerSettings
   [key: string]: unknown
 }
 
-export type FinalMaskTcpLayerSettingsAnyOf = { [key: string]: unknown }
+export type FinalMaskTcpHeaderCustomSettingsErrors = FinalMaskNoiseItem[][] | null
 
-export type FinalMaskTcpHeaderCustomSettingsErrors = XrayNoiseSettings[][] | null
+export type FinalMaskTcpHeaderCustomSettingsServers = FinalMaskNoiseItem[][] | null
 
-export type FinalMaskTcpHeaderCustomSettingsServers = XrayNoiseSettings[][] | null
-
-export type FinalMaskTcpHeaderCustomSettingsClients = XrayNoiseSettings[][] | null
+export type FinalMaskTcpHeaderCustomSettingsClients = FinalMaskNoiseItem[][] | null
 
 export interface FinalMaskTcpHeaderCustomSettings {
   clients?: FinalMaskTcpHeaderCustomSettingsClients
@@ -2748,8 +2749,6 @@ export interface FinalMaskTcpHeaderCustomSettings {
   errors?: FinalMaskTcpHeaderCustomSettingsErrors
   [key: string]: unknown
 }
-
-export type FinalMaskTcpLayerSettings = FinalMaskTcpHeaderCustomSettings | FinalMaskFragmentSettings | FinalMaskSudokuSettings | FinalMaskXmcSettings | FinalMaskTcpLayerSettingsAnyOf
 
 export type FinalMaskSudokuSettingsPaddingMax = number | null
 
@@ -2861,13 +2860,35 @@ export interface FinalMaskPasswordSettings {
   [key: string]: unknown
 }
 
-export type FinalMaskNoiseSettingsNoise = XrayNoiseSettings[] | null
+export type FinalMaskNoiseSettingsNoise = FinalMaskNoiseItem[] | null
 
 export type FinalMaskNoiseSettingsReset = string | number | null
 
 export interface FinalMaskNoiseSettings {
   reset?: FinalMaskNoiseSettingsReset
   noise?: FinalMaskNoiseSettingsNoise
+  [key: string]: unknown
+}
+
+export type FinalMaskNoiseItemRandRange = string | null
+
+export type FinalMaskNoiseItemRand = number | string | null
+
+export type FinalMaskNoiseItemDelay = string | number | null
+
+export type FinalMaskNoiseItemPacket = string | number[] | null
+
+export type FinalMaskNoiseItemType = string | null
+
+/**
+ * Packet camouflage item used by FinalMask. Unlike Freedom noise, this has no apply_to.
+ */
+export interface FinalMaskNoiseItem {
+  type?: FinalMaskNoiseItemType
+  packet?: FinalMaskNoiseItemPacket
+  delay?: FinalMaskNoiseItemDelay
+  rand?: FinalMaskNoiseItemRand
+  randRange?: FinalMaskNoiseItemRandRange
   [key: string]: unknown
 }
 
@@ -2985,9 +3006,9 @@ export type CreateHostEchQueryStrategy = ECHQueryStrategy | null
 
 export type CreateHostEchConfigList = string | null
 
-export type CreateHostStatus = UserStatus[] | null
-
 export type CreateHostDeviceOs = HostPlatform[] | null
+
+export type CreateHostStatus = UserStatus[] | null
 
 export type CreateHostVlessRoute = string | null
 
@@ -2998,26 +3019,6 @@ export type CreateHostFragmentSettings = FragmentSettings | null
 export type CreateHostMuxSettings = MuxSettingsInput | null
 
 export type CreateHostTransportSettings = TransportSettings | null
-
-export type CreateHostHttpHeadersAnyOf = { [key: string]: string }
-
-export type CreateHostHttpHeaders = CreateHostHttpHeadersAnyOf | null
-
-export type CreateHostAllowinsecure = boolean | null
-
-export type CreateHostAlpn = ProxyHostALPN[] | null
-
-export type CreateHostPath = string | null
-
-export type CreateHostHost = string[] | null
-
-export type CreateHostSni = string[] | null
-
-export type CreateHostPort = number | null
-
-export type CreateHostInboundTag = string | null
-
-export type CreateHostId = number | null
 
 export interface CreateHost {
   id?: CreateHostId
@@ -3054,13 +3055,25 @@ export interface CreateHost {
   cipher_suites?: CreateHostCipherSuites
 }
 
-/**
- * Response model for lightweight core list.
- */
-export interface CoresSimpleResponse {
-  cores: CoreSimple[]
-  total: number
-}
+export type CreateHostHttpHeadersAnyOf = { [key: string]: string }
+
+export type CreateHostHttpHeaders = CreateHostHttpHeadersAnyOf | null
+
+export type CreateHostAllowinsecure = boolean | null
+
+export type CreateHostAlpn = ProxyHostALPN[] | null
+
+export type CreateHostPath = string | null
+
+export type CreateHostHost = string[] | null
+
+export type CreateHostSni = string[] | null
+
+export type CreateHostPort = number | null
+
+export type CreateHostInboundTag = string | null
+
+export type CreateHostId = number | null
 
 export type CoreType = (typeof CoreType)[keyof typeof CoreType]
 
@@ -3083,9 +3096,12 @@ export interface CoreSimple {
   type?: CoreSimpleType
 }
 
-export interface CoreResponseList {
-  count: number
-  cores?: CoreResponse[]
+/**
+ * Response model for lightweight core list.
+ */
+export interface CoresSimpleResponse {
+  cores: CoreSimple[]
+  total: number
 }
 
 export type CoreResponseType = CoreType | null
@@ -3100,6 +3116,11 @@ export interface CoreResponse {
   fallbacks_inbound_tags: string[]
   id: number
   created_at: string
+}
+
+export interface CoreResponseList {
+  count: number
+  cores?: CoreResponse[]
 }
 
 export type CoreCreateFallbacksInboundTags = unknown[] | null
@@ -3333,6 +3354,28 @@ export interface BulkUserTemplateSelection {
   ids?: number[]
 }
 
+/**
+ * 'expire': add amount to each user's current expire date (default). 'now': set expire to now + amount for every matched user, regardless of their current expire date. <unix timestamp or ISO datetime>: set expire to that instant + amount for every matched user, regardless of when the request actually executes — useful for staying in sync with an external clock (e.g. a billing system).
+ */
+export type BulkUserExpireAnchor = 'expire' | 'now' | string
+
+export type BulkUserExpireExpireBefore = string | null
+
+export type BulkUserExpireExpireAfter = string | null
+
+export interface BulkUserExpire {
+  dry_run?: boolean
+  group_ids?: number[]
+  admins?: number[]
+  users?: number[]
+  status?: UserStatus[]
+  expire_after?: BulkUserExpireExpireAfter
+  expire_before?: BulkUserExpireExpireBefore
+  amount: number
+  /** 'expire': add amount to each user's current expire date (default). 'now': set expire to now + amount for every matched user, regardless of their current expire date. <unix timestamp or ISO datetime>: set expire to that instant + amount for every matched user, regardless of when the request actually executes — useful for staying in sync with an external clock (e.g. a billing system). */
+  anchor?: BulkUserExpireAnchor
+}
+
 export type BulkUserExpireBefore = string | null
 
 export type BulkUserExpireAfter = string | null
@@ -3346,34 +3389,6 @@ export interface BulkUser {
   expire_after?: BulkUserExpireAfter
   expire_before?: BulkUserExpireBefore
   amount: number
-}
-
-export type BulkUserExpireExpireBefore = string | null
-
-export type BulkUserExpireExpireAfter = string | null
-
-export type BulkUserExpireAnchor = (typeof BulkUserExpireAnchor)[keyof typeof BulkUserExpireAnchor]
-
-/**
- * 'expire': add amount to each user's current expire date (default). 'now': set expire to now + amount for every matched user, regardless of their current expire date.
- */
-// eslint-disable-next-line @typescript-eslint/no-redeclare
-export const BulkUserExpireAnchor = {
-  expire: 'expire',
-  now: 'now',
-} as const
-
-export interface BulkUserExpire {
-  dry_run?: boolean
-  group_ids?: number[]
-  admins?: number[]
-  users?: number[]
-  status?: UserStatus[]
-  expire_after?: BulkUserExpireExpireAfter
-  expire_before?: BulkUserExpireExpireBefore
-  amount: number
-  /** 'expire': add amount to each user's current expire date (default). 'now': set expire to now + amount for every matched user, regardless of their current expire date. */
-  anchor?: BulkUserExpireAnchor
 }
 
 /**
@@ -3424,6 +3439,7 @@ export interface BulkGroupSelection {
 export interface BulkGroup {
   group_ids: number[]
   has_group_ids?: number[]
+  has_no_group?: boolean
   admins?: number[]
   users?: number[]
   dry_run?: boolean
@@ -3508,9 +3524,9 @@ export type BaseHostEchQueryStrategy = ECHQueryStrategy | null
 
 export type BaseHostEchConfigList = string | null
 
-export type BaseHostStatus = UserStatus[] | null
-
 export type BaseHostDeviceOs = HostPlatform[] | null
+
+export type BaseHostStatus = UserStatus[] | null
 
 export type BaseHostVlessRoute = string | null
 
@@ -3616,6 +3632,14 @@ export type AdminsPermissionsResetUsageAnyOf = { [key: string]: PermissionScope 
 
 export type AdminsPermissionsResetUsage = boolean | AdminsPermissionsResetUsageAnyOf | null
 
+export type AdminsPermissionsDeleteAnyOf = { [key: string]: PermissionScope | number }
+
+export type AdminsPermissionsDelete = boolean | AdminsPermissionsDeleteAnyOf | null
+
+export type AdminsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
+
+export type AdminsPermissionsUpdate = boolean | AdminsPermissionsUpdateAnyOf | null
+
 export interface AdminsPermissions {
   create?: AdminsPermissionsCreate
   read?: AdminsPermissionsRead
@@ -3624,14 +3648,6 @@ export interface AdminsPermissions {
   delete?: AdminsPermissionsDelete
   reset_usage?: AdminsPermissionsResetUsage
 }
-
-export type AdminsPermissionsDeleteAnyOf = { [key: string]: PermissionScope | number }
-
-export type AdminsPermissionsDelete = boolean | AdminsPermissionsDeleteAnyOf | null
-
-export type AdminsPermissionsUpdateAnyOf = { [key: string]: PermissionScope | number }
-
-export type AdminsPermissionsUpdate = boolean | AdminsPermissionsUpdateAnyOf | null
 
 export type AdminsPermissionsReadSimpleAnyOf = { [key: string]: PermissionScope | number }
 
@@ -10359,18 +10375,25 @@ export function useUserOnlineIpListAllNodes<TData = Awaited<ReturnType<typeof us
 
 /**
  * Rank users by distinct concurrent online-IP count, most first.
+
+Each entry also includes the user's online IPs (with last-seen timestamps)
+and current traffic usage. IPs are computed live from all healthy nodes on
+each request (or a subset via node_ids); traffic comes from the database
+(already tracked by the usage-recording job, not re-fetched from nodes).
+Supports the same admin/group/status filters as other user list endpoints,
+plus ip_count_min/ip_count_max and node_ids.
  * @summary Users Ranked By Ip Count
  */
-export const usersRankedByIpCount = (params?: GetUsersRankedByIpCountParams, signal?: AbortSignal) => {
+export const usersRankedByIpCount = (params?: UsersRankedByIpCountParams, signal?: AbortSignal) => {
   return orvalFetcher<UserIPRankingList>({ url: `/api/node/online_stats/ranked_by_ip_count`, method: 'GET', params, signal })
 }
 
-export const getUsersRankedByIpCountQueryKey = (params?: GetUsersRankedByIpCountParams) => {
+export const getUsersRankedByIpCountQueryKey = (params?: UsersRankedByIpCountParams) => {
   return [`/api/node/online_stats/ranked_by_ip_count`, ...(params ? [params] : [])] as const
 }
 
 export const getUsersRankedByIpCountQueryOptions = <TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
-  params?: GetUsersRankedByIpCountParams,
+  params?: UsersRankedByIpCountParams,
   options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> },
 ) => {
   const { query: queryOptions } = options ?? {}
@@ -10386,21 +10409,21 @@ export type UsersRankedByIpCountQueryResult = NonNullable<Awaited<ReturnType<typ
 export type UsersRankedByIpCountQueryError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>
 
 export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
-  params: undefined | GetUsersRankedByIpCountParams,
+  params: undefined | UsersRankedByIpCountParams,
   options: {
     query: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> &
       Pick<DefinedInitialDataOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>, 'initialData'>
   },
 ): DefinedUseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
-  params?: GetUsersRankedByIpCountParams,
+  params?: UsersRankedByIpCountParams,
   options?: {
     query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> &
       Pick<UndefinedInitialDataOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>, 'initialData'>
   },
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
-  params?: GetUsersRankedByIpCountParams,
+  params?: UsersRankedByIpCountParams,
   options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> },
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> }
 /**
@@ -10408,7 +10431,7 @@ export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersR
  */
 
 export function useUsersRankedByIpCount<TData = Awaited<ReturnType<typeof usersRankedByIpCount>>, TError = ErrorType<Unauthorized | Forbidden | HTTPValidationError>>(
-  params?: GetUsersRankedByIpCountParams,
+  params?: UsersRankedByIpCountParams,
   options?: { query?: Partial<UseQueryOptions<Awaited<ReturnType<typeof usersRankedByIpCount>>, TError, TData>> },
 ): UseQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
   const queryOptions = getUsersRankedByIpCountQueryOptions(params, options)
@@ -13720,7 +13743,9 @@ export const useModifyUserWithTemplateById = <TData = Awaited<ReturnType<typeof 
 
 - **amount**: amount to adjust the user's quota (in seconds, positive to increase, negative to decrease) required
 - **anchor**: "expire" (default) adds amount to each user's current expire date; "now" sets expire to
-  now + amount for every matched user, regardless of their current expire date
+  now + amount for every matched user, regardless of their current expire date; a unix timestamp or ISO
+  datetime string anchors to that instant instead of "now", keeping the result reproducible even if the
+  request is retried or delayed (e.g. to stay in sync with an external billing clock)
 - **user_ids**: Optional list of user IDs to modify
 - **admins**: Optional list of admin IDs — their users will be targeted
 - **status**: Optional status to filter users (e.g., "expired", "active"), Empty means no filtering
