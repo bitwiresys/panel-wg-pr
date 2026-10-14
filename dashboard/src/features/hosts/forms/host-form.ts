@@ -49,6 +49,7 @@ export interface HostFormValues {
   port?: number
   inbound_tag: string
   status: ('active' | 'disabled' | 'limited' | 'expired' | 'on_hold')[]
+  device_os: ('android' | 'ios' | 'windows' | 'macos' | 'linux' | 'appletv' | 'androidtv' | 'unknown')[]
   host?: string[]
   sni?: string[]
   path?: string
@@ -372,6 +373,7 @@ export const HostFormSchema = z.object({
   port: z.number().min(1, 'Port must be at least 1').max(65535, 'Port must be at most 65535').optional().or(z.literal('')),
   inbound_tag: z.string().min(1, 'Inbound tag is required'),
   status: z.array(z.string()).default([]),
+  device_os: z.array(z.string()).default([]),
   host: z.array(z.string()).default([]),
   sni: z.array(z.string()).default([]),
   path: z.string().default(''),
@@ -508,6 +510,7 @@ export const hostFormDefaultValues: HostFormValues = {
   port: undefined,
   inbound_tag: '',
   status: [],
+  device_os: [],
   host: [],
   sni: [],
   path: '',

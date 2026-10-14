@@ -13,6 +13,8 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.db.models import HostPlatform
+
 SUB_CONFIG_CACHE_TTL_S = 15
 SUB_CONFIG_CACHE_MAX = 4096
 
@@ -27,6 +29,7 @@ def make_sub_config_key(
     config_format: str,
     as_base64: bool,
     randomize_order: bool,
+    platform: HostPlatform | None = None,
 ) -> tuple:
     expire = getattr(user, "expire", None)
     expire_key = expire.timestamp() if hasattr(expire, "timestamp") else expire
@@ -44,6 +47,7 @@ def make_sub_config_key(
         config_format,
         bool(as_base64),
         bool(randomize_order),
+        platform,
         status_key,
         getattr(user, "data_limit", None),
         getattr(user, "used_traffic", None) if config_format == "wireguard" else None,

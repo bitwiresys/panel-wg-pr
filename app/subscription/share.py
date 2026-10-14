@@ -8,7 +8,7 @@ from jdatetime import date as jd
 
 from app.core.hosts import host_manager
 from app.db.crud.wireguard import pick_peer_ip_for_inbound
-from app.db.models import UserStatus
+from app.db.models import HostPlatform, UserStatus
 from app.models.status_emojis import STATUS_EMOJIS
 from app.models.subscription import SubscriptionInboundData
 from app.models.user import UsersResponseWithInbounds
@@ -92,8 +92,9 @@ async def generate_subscription(
     config_format: str,
     as_base64: bool,
     randomize_order: bool = False,
+    platform: HostPlatform | None = None,
 ) -> str | bytes:
-    cache_key = make_sub_config_key(user, config_format, as_base64, randomize_order)
+    cache_key = make_sub_config_key(user, config_format, as_base64, randomize_order, platform)
     async def render() -> str | bytes:
         client_templates = await subscription_client_templates()
         xray_template_overrides = await subscription_xray_templates() if config_format == "xray" else None
@@ -112,6 +113,7 @@ async def generate_subscription(
             xray_template_overrides=xray_template_overrides,
             randomize_order=randomize_order,
             custom_variables=custom_variables,
+            platform=platform,
         )
         if as_base64 and not isinstance(config, bytes):
             config = base64.b64encode(config.encode()).decode()
@@ -298,8 +300,15 @@ def setup_format_variables(user: UsersResponseWithInbounds, custom_variables: li
     return apply_custom_format_variables(format_variables, custom_variables)
 
 
-async def filter_hosts(hosts: list[SubscriptionInboundData], user_status: UserStatus) -> list[SubscriptionInboundData]:
-    return [host for host in hosts if not host.status or user_status in host.status]
+async def filter_hosts(
+    hosts: list[SubscriptionInboundData], user_status: UserStatus, platform: HostPlatform | None = None
+) -> list[SubscriptionInboundData]:
+    return [
+        host
+        for host in hosts
+        if (not host.status or user_status in host.status)
+        and (not host.device_os or platform is None or platform in host.device_os)
+    ]
 
 
 async def process_host(
@@ -449,10 +458,11 @@ async def process_inbounds_and_tags(
     xray_template_overrides: dict[int, str] | None = None,
     randomize_order: bool = False,
     custom_variables: list | tuple | None = None,
+    platform: HostPlatform | None = None,
 ) -> str | bytes:
     proxy_settings = user.proxy_settings.dict()
     proxy_settings["_user_id"] = user.id
-    hosts = await filter_hosts(list((await host_manager.get_hosts()).values()), user.status)
+    hosts = await filter_hosts(list((await host_manager.get_hosts()).values()), user.status, platform)
     if randomize_order and len(hosts) > 1:
         random.shuffle(hosts)
 

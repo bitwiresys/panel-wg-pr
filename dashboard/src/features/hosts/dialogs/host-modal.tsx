@@ -26,6 +26,7 @@ import { useTranslation } from 'react-i18next'
 import { hostFormDefaultValues, type HostFormValues } from '@/features/hosts/forms/host-form'
 import { LoaderButton } from '@/components/ui/loader-button'
 import { FinalMaskSettings } from '../components/finalmask-settings'
+import { PlatformIcon, hostPlatformOptions } from '@/features/subscriptions/components/subscription-application-shared'
 
 // Predefined sessionIDTable aliases recognized by Xray 26.6.22+.
 const SESSION_ID_TABLE_PRESETS = ['ALPHABET', 'Alphabet', 'BASE36', 'Base62', 'HEX', 'alphabet', 'base36', 'hex', 'number']
@@ -117,6 +118,8 @@ const statusOptions = [
   { value: UserStatus.on_hold, label: 'hostsDialog.status.onHold' },
 ] as const
 
+const deviceOsOptions = hostPlatformOptions
+
 const XRAY_TEMPLATE_INBOUND_DEFAULT_VALUE = '__xray_template_inbound_default__'
 
 const createHostFormDefaults = (): HostFormValues => ({
@@ -124,6 +127,7 @@ const createHostFormDefaults = (): HostFormValues => ({
   address: [],
   port: undefined,
   status: [],
+  device_os: [],
   host: [],
   sni: [],
   http_headers: {},
@@ -440,9 +444,7 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
                             <p className="text-muted-foreground text-[11px]">{t('hostsDialog.noise.info')}</p>
                             <p className="text-muted-foreground text-[11px]">{t('hostsDialog.noise.info.attention')}</p>
                             <p className="text-muted-foreground text-[11px]">{t('hostsDialog.noise.info.examples')}</p>
-                            <p className="text-muted-foreground overflow-hidden text-[11px]">
-                              rand:10-20,10-20 rand:10-20,10-20 &base64:7nQBAAABAAAAAAAABnQtcmluZwZtc2VkZ2UDbmV0AAABAAE=,10-25
-                            </p>
+                            <p className="text-muted-foreground overflow-hidden text-[11px]">rand:10-20,10-20 rand:10-20,10-20 &base64:7nQBAAABAAAAAAAABnQtcmluZwZtc2VkZ2UDbmV0AAABAAE=,10-25</p>
                           </div>
                         </PopoverContent>
                       </Popover>
@@ -460,7 +462,7 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
                 </div>
 
                 {/* FinalMask Settings */}
-                <div className="space-y-4 pt-4 border-t">
+                <div className="space-y-4 border-t pt-4">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <h4 className="text-sm font-medium">{t('hostsDialog.finalmask.title', { defaultValue: 'FinalMask Settings' })}</h4>
@@ -472,29 +474,33 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
                         </PopoverTrigger>
                         <PopoverContent className="w-[min(90vw,20rem)] p-3 sm:w-80" side={infoPopoverSide} align={infoPopoverAlign} sideOffset={5}>
                           <div className="space-y-1.5">
-                            <p className="text-muted-foreground text-[11px]">{t('hostsDialog.finalmask.info', { defaultValue: 'Configure custom finalmask client configurations (TCP, UDP, and QUIC params).' })}</p>
+                            <p className="text-muted-foreground text-[11px]">
+                              {t('hostsDialog.finalmask.info', { defaultValue: 'Configure custom finalmask client configurations (TCP, UDP, and QUIC params).' })}
+                            </p>
                           </div>
                         </PopoverContent>
                       </Popover>
                     </div>
                     <Switch
                       checked={form.watch('final_mask_settings') !== undefined && form.watch('final_mask_settings') !== null}
-                      onCheckedChange={(checked) => {
+                      onCheckedChange={checked => {
                         if (checked) {
-                          form.setValue('final_mask_settings', {
-                            tcp: [],
-                            udp: [],
-                            quicParams: {}
-                          }, { shouldDirty: true, shouldTouch: true })
+                          form.setValue(
+                            'final_mask_settings',
+                            {
+                              tcp: [],
+                              udp: [],
+                              quicParams: {},
+                            },
+                            { shouldDirty: true, shouldTouch: true },
+                          )
                         } else {
                           form.setValue('final_mask_settings', undefined, { shouldDirty: true, shouldTouch: true })
                         }
                       }}
                     />
                   </div>
-                  {form.watch('final_mask_settings') !== undefined && form.watch('final_mask_settings') !== null && (
-                    <FinalMaskSettings form={form} />
-                  )}
+                  {form.watch('final_mask_settings') !== undefined && form.watch('final_mask_settings') !== null && <FinalMaskSettings form={form} />}
                 </div>
               </div>
             </TabsContent>
@@ -1100,6 +1106,83 @@ const HostModal: React.FC<HostModalProps> = ({ isDialogOpen, onOpenChange, onSub
                         </Button>
                       )}
                     </div>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="device_os"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('hostsDialog.deviceOs.label')}</FormLabel>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        {field.value && field.value.length > 0 ? (
+                          field.value.map(platform => {
+                            const option = deviceOsOptions.find(opt => opt.value === platform)
+                            if (!option) return null
+                            return (
+                              <span key={platform} className="bg-muted/80 flex items-center gap-2 rounded-md px-2 py-1 text-sm">
+                                <PlatformIcon platform={option.value} />
+                                {t(option.label)}
+                                <button
+                                  type="button"
+                                  className="hover:text-destructive"
+                                  onClick={() => {
+                                    field.onChange(field.value.filter(p => p !== platform))
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            )
+                          })
+                        ) : (
+                          <span className="text-muted-foreground text-sm">{t('hostsDialog.noDeviceOs')}</span>
+                        )}
+                      </div>
+                      <Select
+                        value=""
+                        onValueChange={(value: string) => {
+                          const platform = deviceOsOptions.find(option => option.value === value)?.value
+                          if (!platform) return
+                          const currentValue = field.value || []
+                          if (!currentValue.includes(platform)) {
+                            field.onChange([...currentValue, platform])
+                          }
+                        }}
+                      >
+                        <FormControl>
+                          <SelectTrigger dir={dir} className="w-full py-5">
+                            <SelectValue placeholder={t('hostsDialog.selectDeviceOs')} />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent dir={dir} className="bg-background">
+                          {deviceOsOptions.map(option => (
+                            <SelectItem
+                              key={option.value}
+                              value={option.value}
+                              className="focus:bg-accent flex cursor-pointer items-center gap-2 px-4 py-2"
+                              disabled={field.value?.includes(option.value)}
+                            >
+                              <div className="flex w-full items-center gap-3">
+                                <Checkbox checked={field.value?.includes(option.value)} className="h-4 w-4" />
+                                <PlatformIcon platform={option.value} />
+                                <span className="text-sm font-normal">{t(option.label)}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {field.value && field.value.length > 0 && (
+                        <Button type="button" variant="outline" size="sm" onClick={() => field.onChange([])} className="w-full">
+                          {t('hostsDialog.clearAllDeviceOs')}
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-muted-foreground text-xs">{t('hostsDialog.deviceOs.description')}</p>
                     <FormMessage />
                   </FormItem>
                 )}

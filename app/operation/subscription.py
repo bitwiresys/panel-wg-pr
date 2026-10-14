@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse
 from app.db import AsyncSession
 from app.db.crud.hwid import get_user_hwid_by_value, register_user_hwid
 from app.db.crud.user import get_user_usages, user_sub_update
-from app.db.models import User
+from app.db.models import HostPlatform, User
 from app.models.admin import AdminDetails
 from app.models.settings import (
     Application,
@@ -35,6 +35,7 @@ from app.subscription.share import (
 from app.templates import render_template
 from app.utils.hwid import resolve_effective_hwid_settings
 from app.utils.performance import phase
+from app.utils.platform import detect_host_platform
 from config import template_settings
 
 from . import BaseOperation
@@ -335,7 +336,9 @@ class SubscriptionOperation(BaseOperation):
         # Only include headers that have values
         return {k: v for k, v in headers.items() if v}
 
-    async def fetch_config(self, user: UsersResponseWithInbounds, client_type: ConfigFormat) -> tuple[str | bytes, str]:
+    async def fetch_config(
+        self, user: UsersResponseWithInbounds, client_type: ConfigFormat, platform: HostPlatform = HostPlatform.unknown
+    ) -> tuple[str | bytes, str]:
         # Get client configuration
         config = client_config.get(client_type, {})
         sub_settings = await subscription_settings()
@@ -348,6 +351,7 @@ class SubscriptionOperation(BaseOperation):
                 config_format=config.get("config_format", ""),
                 as_base64=config.get("as_base64", ""),
                 randomize_order=randomize_order,
+                platform=platform,
             ),
             config["media_type"],
         )
@@ -476,6 +480,7 @@ class SubscriptionOperation(BaseOperation):
             )
         role_hwid_settings = db_user.admin.role.hwid if db_user.admin and db_user.admin.role else None
         user = await self.validated_user(db_user)
+        platform = detect_host_platform(x_device_os)
         is_browser_request = "text/html" in accept_header
         is_subscription_page_request = is_browser_request and not sub_settings.disable_sub_template
         if is_subscription_page_request:
@@ -494,6 +499,7 @@ class SubscriptionOperation(BaseOperation):
                 conf, media_type = await self.fetch_config(
                     user,
                     ConfigFormat.links,
+                    platform,
                 )
                 links = conf.splitlines()
 
@@ -526,7 +532,7 @@ class SubscriptionOperation(BaseOperation):
             # Update user subscription info
             await user_sub_update(db, db_user.id, user_agent, ip=ip, hwid=x_hwid)
             with phase("subscription.render"):
-                conf, media_type = await self.fetch_config(user, client_type)
+                conf, media_type = await self.fetch_config(user, client_type, platform)
 
             # If disable_sub_template is True and it's a browser request, use inline to view instead of download
             inline_view = sub_settings.disable_sub_template and is_browser_request
@@ -642,7 +648,7 @@ class SubscriptionOperation(BaseOperation):
         except ValueError as exc:
             await self.raise_error(message=str(exc), code=400)
         with phase("subscription.render"):
-            conf, media_type = await self.fetch_config(user, client_type)
+            conf, media_type = await self.fetch_config(user, client_type, detect_host_platform(x_device_os))
 
         response_headers, body_lines = self._split_headers_for_placement(
             response_headers, sub_settings.header_placement, client_type

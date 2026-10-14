@@ -584,6 +584,17 @@ class ProxyHostALPN(str, Enum):
     h3 = "h3"
 
 
+class HostPlatform(str, Enum):
+    android = "android"
+    ios = "ios"
+    windows = "windows"
+    macos = "macos"
+    linux = "linux"
+    appletv = "appletv"
+    androidtv = "androidtv"
+    unknown = "unknown"
+
+
 ProxyHostFingerprint = Enum(
     "ProxyHostFingerprint",
     {
@@ -640,6 +651,9 @@ class ProxyHost(Base, IdMixin):
     mux_settings: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), default=None)
     status: Mapped[list[UserStatus] | None] = mapped_column(EnumArray(UserStatus, 60), default=list, server_default="")
     ech: Mapped[dict[str, Any] | None] = mapped_column(JSON(none_as_null=True), default=None)
+    device_os: Mapped[list[HostPlatform] | None] = mapped_column(
+        EnumArray(HostPlatform, 100), default=list, server_default=""
+    )
     vless_route: Mapped[str | None] = mapped_column(String(4), default=None)
     pinned_peer_cert_sha256: Mapped[str | None] = mapped_column(String(128), default=None)
     verify_peer_cert_by_name: Mapped[set[str] | None] = mapped_column(

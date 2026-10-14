@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.db.models import ProxyHostALPN, ProxyHostFingerprint, ProxyHostSecurity, UserStatus
+from app.db.models import HostPlatform, ProxyHostALPN, ProxyHostFingerprint, ProxyHostSecurity, UserStatus
 from app.utils.helpers import has_markup_unsafe_chars
 
 from .validators import ListValidator, StringArrayValidator
@@ -757,6 +757,7 @@ class BaseHost(BaseModel):
     priority: int
     status: set[UserStatus] | None = Field(default_factory=set)
     ech: ECHSettings | None = Field(default=None)
+    device_os: set[HostPlatform] | None = Field(default_factory=set)
     pinned_peer_cert_sha256: str | None = Field(default=None)
     verify_peer_cert_by_name: set[str] | None = Field(default_factory=set)
     wireguard_overrides: WireGuardHostOverrides | None = Field(None)

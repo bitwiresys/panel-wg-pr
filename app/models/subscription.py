@@ -318,6 +318,7 @@ class SubscriptionInboundData(BaseModel):
     # Priority and status
     priority: int = Field(0)
     status: list[str] | None = Field(None)
+    device_os: list[str] | None = Field(None)
     subscription_templates: dict[str, Any] | None = Field(default=None)
 
     model_config = {"validate_assignment": True}

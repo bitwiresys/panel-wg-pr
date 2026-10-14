@@ -905,6 +905,20 @@ export interface ECHSettings {
   sing_box?: ClientECHSettings | null;
 }
 
+export type HostPlatform = typeof HostPlatform[keyof typeof HostPlatform];
+
+
+export const HostPlatform = {
+  android: 'android',
+  ios: 'ios',
+  windows: 'windows',
+  macos: 'macos',
+  linux: 'linux',
+  appletv: 'appletv',
+  androidtv: 'androidtv',
+  unknown: 'unknown',
+} as const;
+
 /**
  * Optional per-host values merged into WireGuard subscription output.
  */
@@ -1167,6 +1181,7 @@ export interface BaseHost {
   priority: number;
   status?: UserStatus[] | null;
   ech?: ECHSettings | null;
+  device_os?: HostPlatform[] | null;
   pinned_peer_cert_sha256?: string | null;
   verify_peer_cert_by_name?: string[] | null;
   wireguard_overrides?: WireGuardHostOverrides | null;
@@ -1555,6 +1570,7 @@ export interface CreateHost {
   priority: number;
   status?: UserStatus[] | null;
   ech?: ECHSettings | null;
+  device_os?: HostPlatform[] | null;
   pinned_peer_cert_sha256?: string | null;
   verify_peer_cert_by_name?: string[] | null;
   wireguard_overrides?: WireGuardHostOverrides | null;

@@ -1,4 +1,4 @@
-import { Apple, Laptop, Monitor, Smartphone, Tv } from 'lucide-react'
+import { Apple, HelpCircle, Laptop, Monitor, Smartphone, Tv } from 'lucide-react'
 
 /** Safe HTTP(S) icon URL for app logos (blocks javascript:/data:). */
 export function isValidIconUrl(url: string): boolean {
@@ -24,6 +24,10 @@ export const platformOptions = [
   { value: 'androidtv', label: 'settings.subscriptions.applications.platforms.androidtv' },
 ] as const
 
+// Same platform set as `platformOptions`, plus "unknown" for clients that don't send
+// a device OS header — used by the host "Device OS" filter, not the Applications form.
+export const hostPlatformOptions = [...platformOptions, { value: 'unknown', label: 'settings.subscriptions.applications.platforms.unknown' }] as const
+
 export const languageOptions = [
   { value: 'en', label: 'English', icon: '🇺🇸' },
   { value: 'fa', label: 'فارسی', icon: '🇮🇷' },
@@ -45,6 +49,8 @@ export function PlatformIcon({ platform }: { platform: string }) {
     case 'appletv':
     case 'androidtv':
       return <Tv className="h-3.5 w-3.5" />
+    case 'unknown':
+      return <HelpCircle className="h-3.5 w-3.5" />
     default:
       return <Monitor className="h-3.5 w-3.5" />
   }
