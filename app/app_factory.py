@@ -157,10 +157,6 @@ async def _ignore_worker_sync_message(_: dict):
     return None
 
 
-async def _ignore_worker_sync_message(_: dict):
-    return None
-
-
 async def database_operational_error_handler(request: Request, exc: DBAPIError):
     orig = getattr(exc, "orig", None)
     error_summary = f"{type(orig).__name__}: {orig}" if orig else type(exc).__name__

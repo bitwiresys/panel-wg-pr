@@ -330,6 +330,11 @@ class Subscription(BaseModel):
     randomize_order: bool = Field(default=False)
     custom_variables: list[CustomVariable] = Field(default_factory=list)
 
+    @field_validator("url_prefix")
+    @classmethod
+    def validate_url_prefix(cls, v: str) -> str:
+        return v.strip("/")
+
     @field_validator("custom_variables")
     @classmethod
     def validate_custom_variables(cls, value: list[CustomVariable]) -> list[CustomVariable]:
@@ -363,8 +368,15 @@ class HWIDSettings(BaseModel):
     max_limit: int | None = Field(default=None, ge=0)
 
 
+class OnHoldTimeoutAction(StrEnum):
+    activate = "activate"
+    disable = "disable"
+    delete = "delete"
+
+
 class General(BaseModel):
     default_method: ShadowsocksMethods = Field(default=ShadowsocksMethods.CHACHA20_POLY1305)
+    on_hold_timeout_action: OnHoldTimeoutAction = Field(default=OnHoldTimeoutAction.activate)
     custom_variables: list[CustomVariable] | None = Field(default=None)
 
     @field_validator("custom_variables")

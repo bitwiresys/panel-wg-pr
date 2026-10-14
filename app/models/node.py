@@ -1,15 +1,13 @@
 import re
-from datetime import datetime as dt
 from enum import Enum
 from ipaddress import ip_address
 from uuid import UUID
 
 from cryptography.x509 import load_pem_x509_certificate
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from app.db.models import DataLimitResetStrategy, NodeConnectionType, NodeStatus
 from app.models.stats import Period
-from app.models.user import PaginatedAdminGroupStatusQuery
 
 from .validators import ListValidator, OptionalAwareDatetime, ProxyValidator
 
@@ -205,6 +203,7 @@ class NodeModify(NodeCreate):
 
 class NodeResponse(Node):
     id: int
+    sort_order: int = 0
     api_key: str | None
     core_config_id: int | None
     xray_version: str | None
@@ -235,6 +234,7 @@ class NodeSimple(BaseModel):
     id: int
     name: str
     status: NodeStatus
+    core_config_id: int | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -342,45 +342,16 @@ class UserIPListAll(BaseModel):
     nodes: dict[int, UserIPList | None]  # {node_id: UserIPList | None}
 
 
-class UserIPRankingEntry(BaseModel):
-    """One user's online IPs (unioned across all nodes) and current traffic usage"""
-
-    user_id: int
-    username: str
-    ips: dict[str, int]  # {ip_address: last_seen unix timestamp}, same shape as UserIPList.ips
-    distinct_ip_count: int
-    used_traffic: int  # current period (User.used_traffic), not lifetime_used_traffic -- see User model
-
-
-class UserIPRankingList(BaseModel):
-    """Users ranked by distinct online-IP count, most first"""
-
-    users: list[UserIPRankingEntry]
-    updated_at: dt | None  # last time the ranking was computed; None if never computed yet
-    total: int = 0  # total matching users across all pages, for client-side pagination
-    skipped_node_count: int = (
-        0  # healthy nodes that couldn't be queried (REST-transport or old binary); ranking is partial if > 0
-    )
-
-
-class UserOnlineIPsSnapshot(BaseModel):
-    """Wire format for handing per-user online-IP maps, computed live, from
-    a node-role process to a backend-role process over NATS (see
-    app/node/worker.py's get_users_ip_ranking handler)."""
-
-    users: dict[int, dict[str, int]] = Field(default_factory=dict)  # {user_id: {ip: last_seen}}
-    computed_at: dt
-    skipped_node_count: int = 0
-
-
-class UserIPRankingQuery(PaginatedAdminGroupStatusQuery):
-    ip_count_min: int | None = Field(default=None, ge=0)
-    ip_count_max: int | None = Field(default=None, ge=0)
-    node_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("node_ids", "node_id"))
-
-
 class NodeCoreUpdate(BaseModel):
     core_version: str = Field(default="latest", pattern=r"^(latest|v?\d+\.\d+\.\d+)$", examples=["v25.8.31"])
+
+    @field_validator("core_version")
+    @classmethod
+    def add_v_prefix(cls, value: str) -> str:
+        # node-serviced and pg-node look versions up by release tag, which always starts with "v".
+        if value != "latest" and not value.startswith("v"):
+            return f"v{value}"
+        return value
 
 
 class NodeGeoFilesUpdate(BaseModel):

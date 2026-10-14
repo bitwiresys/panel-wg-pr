@@ -14,7 +14,13 @@ from app.models.subscription import SubscriptionInboundData
 from app.models.user import UsersResponseWithInbounds
 from app.settings import subscription_settings
 from app.subscription.client_templates import subscription_client_templates, subscription_xray_templates
-from app.subscription.config_cache import get_sub_config, make_sub_config_key, put_sub_config
+from app.subscription.config_cache import (
+    get_or_create_sub_config,
+    get_sub_config,
+    make_sub_config_key,
+    put_sub_config,
+)
+from app.utils.helpers import has_markup_unsafe_chars
 from app.utils.system import readable_size
 
 from . import (
@@ -29,6 +35,9 @@ from . import (
 
 SERVER_IP = "127.0.0.1"
 SERVER_IPV6 = "[::1]"
+
+# Transports only the Xray JSON format can express.
+XRAY_ONLY_NETWORKS = frozenset({"xdrive"})
 
 
 def _build_subscription_config(
@@ -85,37 +94,40 @@ async def generate_subscription(
     randomize_order: bool = False,
     platform: HostPlatform | None = None,
 ) -> str | bytes:
-    cache_key = make_sub_config_key(user, config_format, as_base64, randomize_order)
-    cached = get_sub_config(cache_key)
-    if cached is not None:
-        return cached
+    cache_key = make_sub_config_key(user, config_format, as_base64, randomize_order, platform)
+    async def render() -> str | bytes:
+        client_templates = await subscription_client_templates()
+        xray_template_overrides = await subscription_xray_templates() if config_format == "xray" else None
+        conf = _build_subscription_config(config_format, client_templates)
+        if conf is None:
+            raise ValueError(f'Unsupported format "{config_format}"')
 
-    client_templates = await subscription_client_templates()
-    xray_template_overrides = await subscription_xray_templates() if config_format == "xray" else None
-    conf = _build_subscription_config(config_format, client_templates)
-    if conf is None:
-        raise ValueError(f'Unsupported format "{config_format}"')
+        sub_settings = await subscription_settings()
+        custom_variables = get_effective_custom_variables(user, sub_settings.custom_variables)
+        format_variables = setup_format_variables(user, sub_settings.custom_variables)
+        config = await process_inbounds_and_tags(
+            user,
+            format_variables,
+            conf,
+            client_templates,
+            xray_template_overrides=xray_template_overrides,
+            randomize_order=randomize_order,
+            custom_variables=custom_variables,
+            platform=platform,
+        )
+        if as_base64 and not isinstance(config, bytes):
+            config = base64.b64encode(config.encode()).decode()
+        return config
 
-    sub_settings = await subscription_settings()
-    custom_variables = get_effective_custom_variables(user, sub_settings.custom_variables)
-    format_variables = setup_format_variables(user, sub_settings.custom_variables)
+    if config_format != "wireguard":
+        cached = get_sub_config(cache_key)
+        if cached is not None:
+            return cached
+        config = await render()
+        put_sub_config(cache_key, config)
+        return config
 
-    config = await process_inbounds_and_tags(
-        user,
-        format_variables,
-        conf,
-        client_templates,
-        xray_template_overrides=xray_template_overrides,
-        randomize_order=randomize_order,
-        custom_variables=custom_variables,
-        platform=platform,
-    )
-
-    if as_base64 and not isinstance(config, bytes):
-        config = base64.b64encode(config.encode()).decode()
-
-    put_sub_config(cache_key, config)
-    return config
+    return await get_or_create_sub_config(cache_key, render)
 
 
 def inject_body_placement(conf: str | bytes, lines: list[str], placement: str, as_base64: bool) -> str | bytes:
@@ -190,7 +202,7 @@ def apply_custom_format_variables(format_variables: dict, custom_variables: list
             continue
         try:
             format_variables[key] = raw_value.format_map(base_variables)
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             format_variables[key] = raw_value
 
     return format_variables
@@ -200,7 +212,7 @@ def _format_dynamic_value(value, format_variables: dict):
     if isinstance(value, str):
         try:
             return value.format_map(format_variables)
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             return value
     if isinstance(value, list):
         return [_format_dynamic_value(item, format_variables) for item in value]
@@ -465,6 +477,9 @@ async def process_inbounds_and_tags(
         return xray_template_overrides.get(template_id)
 
     for host_data in hosts:
+        if host_data.network in XRAY_ONLY_NETWORKS and not isinstance(conf, XrayConfiguration):
+            # Links, sing-box, Clash and Outline cannot carry these transports.
+            continue
         result = await process_host(host_data, format_variables, user.inbounds, proxy_settings, custom_variables)
         if not result:
             continue
@@ -475,6 +490,10 @@ async def process_inbounds_and_tags(
         # Format remark and address with user variables
         remark = inbound_copy.remark.format_map(format_variables)
         formatted_address = inbound_copy.address.format_map(format_variables)
+        if has_markup_unsafe_chars(formatted_address):
+            # Never valid, and links print the address unencoded; covers hosts saved before
+            # address validation existed and values that came in through a format variable.
+            continue
 
         download_settings = getattr(inbound_copy.transport_config, "download_settings", None)
         if download_settings:

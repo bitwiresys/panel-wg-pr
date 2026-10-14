@@ -32,7 +32,7 @@ import {
 import { getInboundSecuritySelectOptions, getInboundTransportSelectOptions, transportCompatibleWithReality } from '@/features/core-editor/kit/inbound-form-options'
 import { profileDuplicateTagMessage, profileTagHasDuplicateUsage } from '@/features/core-editor/kit/profile-tag-uniqueness'
 import { remapIndexAfterArrayMove } from '@/features/core-editor/kit/remap-index-after-move'
-import { isPlaceholderTunnelRewriteAddress, normalizeTunnelNetworkForKit } from '@/features/core-editor/kit/sanitize-inbound'
+import { normalizeTunnelNetworkForKit } from '@/features/core-editor/kit/sanitize-inbound'
 import { coerceVerifyPeerCertByNameList, inferParityFieldMode, outboundSettingToString, parseOutboundSettingValue, stringifyJsonFormRecord } from '@/features/core-editor/kit/xray-parity-value'
 import { useCoreEditorStore } from '@/features/core-editor/state/core-editor-store'
 import useDirDetection from '@/hooks/use-dir-detection'
@@ -675,14 +675,12 @@ function tunnelLegacySettingsRecord(inbound: Inbound): Record<string, unknown> {
 function tunnelAddressForForm(inbound: Inbound): string {
   const r = inbound as Record<string, unknown>
   if (typeof r.address === 'string') {
-    const t = r.address.trim()
-    return t !== '' && !isPlaceholderTunnelRewriteAddress(t) ? t : ''
+    return r.address.trim()
   }
   const s = tunnelLegacySettingsRecord(inbound)
   const v = s.rewriteAddress ?? s.address
   if (typeof v === 'string') {
-    const t = v.trim()
-    return t !== '' && !isPlaceholderTunnelRewriteAddress(t) ? v : ''
+    return v.trim()
   }
   return v != null ? String(v) : ''
 }
@@ -5352,7 +5350,7 @@ export function XrayInboundsSection({ headerAddPulse, headerAddEpoch }: XrayInbo
                           patchInbound({ address: nextAddresses.length > 0 ? nextAddresses : undefined } as Partial<Inbound>)
                         }}
                         placeholder={t('coreEditor.inbound.wireguard.addressHint', {
-                          defaultValue: 'Example: 10.0.0.1/32',
+                          defaultValue: 'Example: 10.0.0.1/24',
                         })}
                         addPlaceholder={t('coreEditor.inbound.wireguard.addressAddPlaceholder', {
                           defaultValue: 'Add address',

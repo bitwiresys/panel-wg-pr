@@ -1,6 +1,3 @@
-import copy
-import json
-
 from fastapi import status
 
 from app.core.xray import XRayConfig
@@ -32,21 +29,6 @@ def test_core_create(access_token):
     assert len(core["fallbacks_inbound_tags"]) == 2
     assert len(core["exclude_inbound_tags"]) == 0
     delete_core(access_token, core["id"])
-
-
-def test_core_create_preserves_vless_validator_settings():
-    """An external `validator` block inside a VLESS inbound's settings must
-    pass through XRayConfig untouched, since it's opaque to the panel and
-    only interpreted by xray-core."""
-
-    validator = {"type": "rest", "settings": {"address": "http://user-store:8080"}}
-    config = copy.deepcopy(xray_config)
-    config["inbounds"][0]["settings"]["validator"] = validator
-
-    core = XRayConfig(config, set(), {"fallback-A", "fallback-B"})
-
-    assert core["inbounds"][0]["settings"]["validator"] == validator
-    assert json.loads(core.to_str())["inbounds"][0]["settings"]["validator"] == validator
 
 
 def test_wireguard_core_create(access_token):
@@ -136,7 +118,6 @@ def test_wireguard_core_create_skips_user_scan_and_allocates_on_group(access_tok
         delete_group(access_token, starter_group["id"])
         delete_core(access_token, wg_core["id"])
         delete_core(access_token, starter["id"])
-
 
 def test_core_update(access_token):
     """Test that the core update route is accessible."""

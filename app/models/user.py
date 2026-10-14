@@ -91,7 +91,7 @@ class UserCreate(UserWithValidator):
     @field_validator("group_ids", mode="after")
     @classmethod
     def group_ids_validator(cls, v):
-        return ListValidator.nullable_list(v, "group")
+        return ListValidator.not_null_list(v, "group")
 
 
 class UserModify(UserWithValidator):
@@ -141,6 +141,8 @@ class UserResponse(UserNotificationResponse):
 
 
 class SubscriptionUserResponse(UserResponse):
+    # A shareable subscription token must not expose connection credentials in metadata.
+    proxy_settings: ProxyTable = Field(default_factory=ProxyTable, exclude=True)
     admin: AdminContactInfo | None = Field(default=None, exclude=True)
     note: str | None = Field(None, exclude=True)
     auto_delete_in_days: int | None = Field(None, exclude=True)
@@ -155,8 +157,13 @@ class UsersResponseWithInbounds(SubscriptionUserResponse):
     model_config = ConfigDict(from_attributes=True)
 
 
+class UserListItem(UserResponse):
+    # None when the device count was not loaded, for example without hwids.read
+    hwid_count: int | None = Field(default=None, ge=0)
+
+
 class UsersResponse(BaseModel):
-    users: list[UserResponse]
+    users: list[UserListItem]
     total: int
 
 
@@ -176,6 +183,7 @@ class UsersSimpleResponse(BaseModel):
 
 
 class UserSortField(str, Enum):
+    hwid_count = "hwid_count"
     username = "username"
     used_traffic = "used_traffic"
     data_limit = "data_limit"
@@ -196,6 +204,8 @@ class SortDirection(str, Enum):
 
 
 class UserSortOption(str, Enum):
+    hwid_count = "hwid_count"
+    desc_hwid_count = "-hwid_count"
     username = "username"
     used_traffic = "used_traffic"
     data_limit = "data_limit"
@@ -235,22 +245,9 @@ class UserSimpleSortOption(str, Enum):
         return SortDirection.desc if self.value.startswith("-") else SortDirection.asc
 
 
-class PaginatedAdminGroupStatusQuery(BaseModel):
-    """Shared offset/limit/admin/group/status filters for endpoints that list
-    or rank users. Kept separate from UserListQuery's other filters so it can
-    be reused as-is by narrower query models (e.g. UserIPRankingQuery)
-    without pulling in fields (search, sort, expire ranges, ...) that don't
-    apply there."""
-
+class UserListQuery(BaseModel):
     offset: int | None = Field(default=None)
     limit: int | None = Field(default=None)
-    admin_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("admin_ids", "admin_id"))
-    group_ids: list[int] | None = Field(default=None, alias="group")
-    status: UserStatus | list[UserStatus] | None = Field(default=None)
-    model_config = ConfigDict(populate_by_name=True)
-
-
-class UserListQuery(PaginatedAdminGroupStatusQuery):
     ids: list[int] | None = Field(default=None)
     username: list[str] | None = Field(default=None)
     usernames: list[str] | None = Field(default=None)
@@ -259,6 +256,7 @@ class UserListQuery(PaginatedAdminGroupStatusQuery):
     group_ids: list[int] | None = Field(default=None, alias="group")
     no_group: bool = Field(default=False)
     search: str | None = Field(default=None)
+    status: UserStatus | list[UserStatus] | None = Field(default=None)
     sort: list[UserSortOption] = Field(default_factory=list)
     proxy_id: str | None = Field(default=None)
     data_limit_reset_strategy: DataLimitResetStrategy | list[DataLimitResetStrategy] | None = Field(
@@ -310,15 +308,26 @@ class UsersUsageQuery(UserUsageQuery):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class UsersUsageBreakdownQuery(UsersUsageQuery):
+    core_id: int | None = Field(default=None)
+    group_by_admin: bool = Field(default=False)
+
+
 class ExpiredUsersQuery(BaseModel):
     admin_username: str | None = Field(default=None)
-    target: Literal["expired", "limited", "on_hold", "disabled"] = Field(default="expired")
+    target: Literal["expired", "limited", "on_hold", "disabled", "inactive"] = Field(default="expired")
     expired_after: OptionalAwareDatetime = Field(default=None, examples=["2024-01-01T00:00:00+03:30"])
     expired_before: OptionalAwareDatetime = Field(default=None, examples=["2024-01-31T23:59:59+03:30"])
     dry_run: bool = Field(
         default=False,
         description="If true, returns users that would be deleted without actually deleting them.",
     )
+
+    @model_validator(mode="after")
+    def validate_inactive_cutoff(self):
+        if self.target == "inactive" and self.expired_before is None:
+            raise ValueError("expired_before is required when target is inactive")
+        return self
 
 
 class UserSubscriptionUpdateSchema(BaseModel):
@@ -449,7 +458,7 @@ class BulkUserExpire(BulkUser):
 
     @field_validator("anchor", mode="before")
     @classmethod
-    def validate_anchor(cls, v):
+    def validate_anchor(cls, v: dt | int | str | bool) -> dt | int | str | bool:
         if isinstance(v, str) and v in ("expire", "now"):
             return v
         if isinstance(v, bool):

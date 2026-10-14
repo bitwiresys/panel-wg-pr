@@ -54,6 +54,16 @@ async def serialize_user(user: User, allowed_protocols: frozenset[ProxyProtocol]
     return _serialize_user_for_node(user.id, user_settings, inbounds, allowed_protocols)
 
 
+async def node_payload_signature(user: User) -> tuple[str, bytes, tuple[str, ...]]:
+    """What a node would receive for this user, in a form that can be compared before and after a change.
+
+    Uses the same serialization as delivery (credentials, inbounds derived from
+    enabled groups, and status), so equal signatures mean no node needs an update.
+    """
+    proto = await serialize_user(user)
+    return proto.email, proto.proxies.SerializeToString(deterministic=True), tuple(sorted(proto.inbounds))
+
+
 def _serialize_user_for_node(
     id: int,
     user_settings: dict,
@@ -80,20 +90,9 @@ def _serialize_user_for_node(
     if ProxyProtocol.hysteria in allowed_protocols:
         proxy_kwargs["hysteria_auth"] = user_settings.get("hysteria", {}).get("auth")
 
-    proxy = create_proxy(**proxy_kwargs)
-    if (
-        pre_shared_key := wireguard_settings.get("pre_shared_key")
-        if ProxyProtocol.wireguard in allowed_protocols
-        else None
-    ):
-        try:
-            proxy.wireguard.pre_shared_key = pre_shared_key
-        except AttributeError as exc:
-            raise RuntimeError("PasarGuardNodeBridge protobufs do not support WireGuard pre_shared_key") from exc
-
     return create_user(
         str(id),
-        proxy,
+        create_proxy(**proxy_kwargs),
         inbounds,
     )
 
@@ -102,7 +101,11 @@ async def core_users(
     db: AsyncSession,
     inbound_tags: list[str] | set[str] | None = None,
     allowed_protocols: frozenset[ProxyProtocol] | None = None,
+    user_ids: list[int] | set[int] | None = None,
 ):
+    """Serialize the users a core should carry, optionally restricted to ``user_ids`` (one indexed query)."""
+    if user_ids is not None and not user_ids:
+        return []
     dialect = db.bind.dialect.name
     inbound_tags = list(dict.fromkeys(inbound_tags or []))
 
@@ -149,6 +152,8 @@ async def core_users(
         )
         .group_by(User.id)
     )
+    if user_ids is not None:
+        stmt = stmt.where(User.id.in_(list(user_ids)))
 
     results = (await db.execute(stmt)).all()
     bridge_users: list = []

@@ -7,11 +7,7 @@ from fastapi import Response
 from fastapi.responses import HTMLResponse
 
 from app.db import AsyncSession
-from app.db.crud.hwid import (
-    get_user_hwid_by_value,
-    get_user_hwid_count,
-    register_user_hwid,
-)
+from app.db.crud.hwid import get_user_hwid_by_value, register_user_hwid
 from app.db.crud.user import get_user_usages, user_sub_update
 from app.db.models import HostPlatform, User
 from app.models.admin import AdminDetails
@@ -38,6 +34,7 @@ from app.subscription.share import (
 )
 from app.templates import render_template
 from app.utils.hwid import resolve_effective_hwid_settings
+from app.utils.performance import phase
 from app.utils.platform import detect_host_platform
 from config import template_settings
 
@@ -120,8 +117,10 @@ class SubscriptionOperation(BaseOperation):
 
     @staticmethod
     async def validated_user(db_user: User) -> UsersResponseWithInbounds:
-        user = UsersResponseWithInbounds.model_validate(db_user.__dict__)
-        user.inbounds = await db_user.inbounds()
+        with phase("subscription.user_model"):
+            user = UsersResponseWithInbounds.model_validate(db_user.__dict__)
+        with phase("subscription.inbounds"):
+            user.inbounds = await db_user.inbounds()
         user.expire = db_user.expire
         user.lifetime_used_traffic = db_user.lifetime_used_traffic
 
@@ -157,7 +156,7 @@ class SubscriptionOperation(BaseOperation):
 
         try:
             return profile_title.format_map(format_variables)
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             # Invalid format string, return original title
             return profile_title
 
@@ -169,7 +168,7 @@ class SubscriptionOperation(BaseOperation):
 
         try:
             return sub_settings.announce.format_map(format_variables)
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             return sub_settings.announce
 
     @staticmethod
@@ -180,7 +179,7 @@ class SubscriptionOperation(BaseOperation):
 
         try:
             return sub_settings.announce_url.format_map(format_variables)
-        except (ValueError, KeyError):
+        except ValueError, KeyError:
             return sub_settings.announce_url
 
     @staticmethod
@@ -309,7 +308,7 @@ class SubscriptionOperation(BaseOperation):
                 return ""
             try:
                 return header_value.format_map(format_variables)
-            except (ValueError, KeyError):
+            except ValueError, KeyError:
                 return header_value
 
         if isinstance(value, (dict, list, tuple, bool, int, float)):
@@ -448,16 +447,9 @@ class SubscriptionOperation(BaseOperation):
                 last_used = last_used.replace(tzinfo=UTC)
             if last_used is not None and (dt.now(UTC) - last_used).total_seconds() < 300:
                 return
-            await register_user_hwid(db, user_id, x_hwid, x_device_os, x_ver_os, x_device_model)
-            return
 
-        # It's a new HWID, check limit
-        if limit is not None and limit > 0:
-            current_count = await get_user_hwid_count(db, user_id)
-            if current_count >= limit:
-                await self.raise_error(message="Device limit reached", code=403)
-
-        await register_user_hwid(db, user_id, x_hwid, x_device_os, x_ver_os, x_device_model)
+        if not await register_user_hwid(db, user_id, x_hwid, x_device_os, x_ver_os, x_device_model, limit=limit):
+            await self.raise_error(message="Device limit reached", code=403)
 
     async def user_subscription(
         self,
@@ -476,7 +468,16 @@ class SubscriptionOperation(BaseOperation):
         Provides a subscription link based on the user agent (Clash, V2Ray, etc.).
         """
         sub_settings: SubSettings = await subscription_settings()
-        db_user = await self.get_validated_sub(db, token, load_admin_role=True, **self._SUB_CONFIG_LOAD)
+        matched_rule = self.detect_client_rule(user_agent, sub_settings.rules)
+        wireguard_fast = (
+            "text/html" not in accept_header
+            and matched_rule is not None
+            and matched_rule.target == ConfigFormat.wireguard
+        )
+        with phase("subscription.user_lookup"):
+            db_user = await self.get_validated_sub(
+                db, token, load_admin_role=True, wireguard_fast=wireguard_fast, **self._SUB_CONFIG_LOAD
+            )
         role_hwid_settings = db_user.admin.role.hwid if db_user.admin and db_user.admin.role else None
         user = await self.validated_user(db_user)
         platform = detect_host_platform(x_device_os)
@@ -524,14 +525,14 @@ class SubscriptionOperation(BaseOperation):
                 x_ver_os,
                 x_device_model,
             )
-            matched_rule = self.detect_client_rule(user_agent, sub_settings.rules)
             client_type = matched_rule.target if matched_rule else None
             if client_type == ConfigFormat.block or not client_type:
                 await self.raise_error(message="Client not supported", code=406)
 
             # Update user subscription info
             await user_sub_update(db, db_user.id, user_agent, ip=ip, hwid=x_hwid)
-            conf, media_type = await self.fetch_config(user, client_type, platform)
+            with phase("subscription.render"):
+                conf, media_type = await self.fetch_config(user, client_type, platform)
 
             # If disable_sub_template is True and it's a browser request, use inline to view instead of download
             inline_view = sub_settings.disable_sub_template and is_browser_request
@@ -612,7 +613,14 @@ class SubscriptionOperation(BaseOperation):
 
         if client_type == ConfigFormat.block or not getattr(sub_settings.manual_sub_request, client_type):
             await self.raise_error(message="Client not supported", code=406)
-        db_user = await self.get_validated_sub(db, token=token, load_admin_role=True, **self._SUB_CONFIG_LOAD)
+        with phase("subscription.user_lookup"):
+            db_user = await self.get_validated_sub(
+                db,
+                token=token,
+                load_admin_role=True,
+                wireguard_fast=client_type == ConfigFormat.wireguard,
+                **self._SUB_CONFIG_LOAD,
+            )
         user = await self.validated_user(db_user)
 
         await self.validate_and_register_hwid(
@@ -639,7 +647,8 @@ class SubscriptionOperation(BaseOperation):
             response_headers = self.sanitize_response_headers(response_headers)
         except ValueError as exc:
             await self.raise_error(message=str(exc), code=400)
-        conf, media_type = await self.fetch_config(user, client_type, detect_host_platform(x_device_os))
+        with phase("subscription.render"):
+            conf, media_type = await self.fetch_config(user, client_type, detect_host_platform(x_device_os))
 
         response_headers, body_lines = self._split_headers_for_placement(
             response_headers, sub_settings.header_placement, client_type
@@ -700,7 +709,10 @@ class SubscriptionOperation(BaseOperation):
         is_hwid_enabled = await self.is_user_hwid_enabled(db_user)
 
         links = []
-        if sub_settings.allow_browser_config:
+        global_hwid_conf: HWIDSettings = await hwid_settings()
+        if sub_settings.allow_browser_config and (
+            not is_hwid_enabled or not global_hwid_conf.require_hwid_for_manual_sub
+        ):
             conf, _ = await self.fetch_config(user, ConfigFormat.links)
             links = conf.splitlines()
         format_variables = await self.get_format_variables(user)

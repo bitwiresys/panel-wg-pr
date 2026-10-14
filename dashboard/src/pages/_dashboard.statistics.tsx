@@ -1,6 +1,5 @@
 import PageHeader from '@/components/layout/page-header'
 import MainContent from '@/features/statistics/components/statistics-charts'
-import IpRankingTable from '@/features/statistics/components/ip-ranking-table'
 import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useGetSystemResourceStats, useGetSystemUsersStats, useGetNodesSimple, NodeSimple, NodeStatus } from '@/service/api'
@@ -72,8 +71,8 @@ const Statistics = () => {
   const { data: usersData } = useGetSystemUsersStats(undefined, {
     query: {
       enabled: canViewSystemStats && selectedServer === 'master',
-      refetchInterval: canViewSystemStats && selectedServer === 'master' ? 2000 : false,
-      staleTime: 1000,
+      refetchInterval: canViewSystemStats && selectedServer === 'master' ? 30_000 : false,
+      staleTime: 15_000,
       refetchOnWindowFocus: true,
     },
   })
@@ -149,14 +148,6 @@ const Statistics = () => {
           </div>
         </div>
       </div>
-
-      {canViewNodeStats && (
-        <div className="w-full px-3 pt-2 pb-4 sm:px-4">
-          <div className="animate-slide-up transform-gpu" style={{ animationDuration: '500ms', animationDelay: '150ms', animationFillMode: 'both' }}>
-            <IpRankingTable nodesData={nodesData} isLoadingNodes={isLoadingNodes} />
-          </div>
-        </div>
-      )}
     </div>
   )
 }

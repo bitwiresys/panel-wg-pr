@@ -1,6 +1,6 @@
 import asyncio
-from collections.abc import AsyncIterator, Callable
-from datetime import UTC, datetime
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import ClassVar
 
 from fastapi import HTTPException
@@ -25,11 +25,12 @@ from app.db.crud.node import (
     modify_node,
     remove_node,
     remove_nodes,
+    reorder_nodes,
     reset_node_usage,
     update_node_status,
 )
-from app.db.crud.user import get_user_by_id, get_user_count_metric_stats, get_users
-from app.db.models import Node, NodeStatus, UserStatus
+from app.db.crud.user import get_user_by_id, get_user_count_metric_stats
+from app.db.models import Node, NodeStatus
 from app.models.admin import AdminDetails
 from app.models.core import CoreType
 from app.models.node import (
@@ -53,10 +54,6 @@ from app.models.node import (
     UsageTable,
     UserIPList,
     UserIPListAll,
-    UserIPRankingEntry,
-    UserIPRankingList,
-    UserIPRankingQuery,
-    UserOnlineIPsSnapshot,
 )
 from app.models.stats import (
     NodeOutboundsLatencyResponse,
@@ -67,10 +64,9 @@ from app.models.stats import (
     UserCountMetricStatsList,
     validate_user_count_metric_scope,
 )
-from app.models.user import UserListQuery
 from app.nats import needs_shared_bridge_memory
 from app.nats.node_rpc import node_nats_client
-from app.node import core_users, node_manager
+from app.node import UserSyncPreemptedError, core_users, node_manager
 from app.node.manager_sync import publish_node_sync
 from app.node.nats_memory import clear_bridge_memory_for_node
 from app.operation import BaseOperation, OperatorType
@@ -80,8 +76,17 @@ from config import runtime_settings
 MAX_MESSAGE_LENGTH = 128
 # Cap parallel start/attach so ~100 nodes don't stampede NATS lifecycle KV.
 CONNECT_CONCURRENCY = 10
+NODE_RESTART_FIELDS = frozenset({"core_config_id", "keep_alive"})
+WIREGUARD_BATCHED_START_THRESHOLD = 1000
+WIREGUARD_START_BATCH_SIZE = 100
+type CoreUsers = list | Callable[[], Awaitable[list]]
 
 logger = get_logger("node-operation")
+
+
+# Maintenance RPCs (split roles) wait for the node worker, which waits for node-serviced's pg-node command
+# (5 minute deadline; the bridge itself allows 330 s). The default node RPC timeout (30 s) is far too short.
+_MAINTENANCE_RPC_TIMEOUT = 340.0
 
 
 class NodeOperation(BaseOperation):
@@ -90,6 +95,7 @@ class NodeOperation(BaseOperation):
     _in_flight_connects: ClassVar[set[int]] = set()
 
     def __init__(self, operator_type: OperatorType):
+        """Select local or remote node-operation handlers for this process role."""
         super().__init__(operator_type)
         if runtime_settings.role.runs_node:
             sync = needs_shared_bridge_memory()
@@ -100,6 +106,7 @@ class NodeOperation(BaseOperation):
             self._disconnect_single_impl = (
                 self._disconnect_single_node_sync if sync else self._disconnect_single_node_local
             )
+
             self._sync_node_users_impl = self._sync_node_users_local
             self._get_node_stats_impl = self._get_node_system_stats_local
             self._get_nodes_stats_impl = self._get_nodes_system_stats_local
@@ -112,7 +119,6 @@ class NodeOperation(BaseOperation):
             self._update_geofiles_impl = self._update_geofiles_local
             self._get_logs_impl = self._get_logs_local
             self._restart_all_impl = self._restart_all_nodes_local
-            self._get_users_ip_ranking_impl = self._get_users_ip_ranking_local
         else:
             self._update_node_impl = self._update_node_remote
             self._remove_node_impl = self._remove_node_remote
@@ -131,7 +137,12 @@ class NodeOperation(BaseOperation):
             self._update_geofiles_impl = self._update_geofiles_remote
             self._get_logs_impl = self._get_logs_remote
             self._restart_all_impl = self._restart_all_nodes_remote
-            self._get_users_ip_ranking_impl = self._get_users_ip_ranking_remote
+
+    async def reorder_nodes(self, db: AsyncSession, ordered_ids: list[int], admin: AdminDetails) -> None:
+        """Persist a node order requested by an administrator."""
+        if not await reorder_nodes(db, ordered_ids):
+            await self.raise_error(message="Node not found", code=404, db=db)
+        logger.info('Nodes reordered by admin "%s"', admin.username)
 
     async def get_db_nodes(
         self,
@@ -155,7 +166,7 @@ class NodeOperation(BaseOperation):
         """Get lightweight node list with only id and name"""
         rows, total = await get_nodes_simple(db=db, query=query)
 
-        nodes = [NodeSimple(id=row[0], name=row[1], status=row[2]) for row in rows]
+        nodes = [NodeSimple(id=row[0], name=row[1], status=row[2], core_config_id=row[3]) for row in rows]
 
         return NodesSimpleResponse(nodes=nodes, total=total)
 
@@ -168,7 +179,8 @@ class NodeOperation(BaseOperation):
         xray_version: str = "",
         node_version: str = "",
         send_notification: bool = True,
-    ):
+        expected_status: NodeStatus | None = None,
+    ) -> bool:
         """
         Update single node status with optional notification.
 
@@ -180,33 +192,44 @@ class NodeOperation(BaseOperation):
             xray_version (str): Xray version.
             node_version (str): Node version.
             send_notification (bool): Whether to send notification.
+            expected_status: Ignore observations made before a concurrent status change.
         """
         db_node = await get_node_by_id(db, node_id, load_usage_logs=False)
         if not db_node:
-            return
+            return False
+        if expected_status is not None and db_node.status != expected_status:
+            return False
 
         if db_node.status in (NodeStatus.disabled, NodeStatus.limited) and status not in (
             NodeStatus.disabled,
             NodeStatus.limited,
         ):
-            return
+            return False
 
         old_status = db_node.status
 
+        if expected_status is not None and old_status == status and db_node.message == message:
+            return True
+
         if status == NodeStatus.error:
+            if expected_status is not None:
+                xray_version, node_version = db_node.xray_version, db_node.node_version
             logger.error(f"Failed to connect node {db_node.name} with id {db_node.id}, Error: {message}")
 
-        await update_node_status(
+        updated = await update_node_status(
             db=db,
             db_node=db_node,
             status=status,
             message=message,
             xray_version=xray_version,
             node_version=node_version,
+            expected_status=expected_status,
         )
 
+        if updated is None or db_node.status != status:
+            return False
         if not send_notification:
-            return
+            return True
 
         if status == NodeStatus.connected and old_status != NodeStatus.connected:
             node_notif = NodeNotification(
@@ -227,17 +250,34 @@ class NodeOperation(BaseOperation):
             )
             asyncio.create_task(notification.error_node(node_notif))
 
+        return True
+
     @staticmethod
     async def _get_core_users_map(
-        db: AsyncSession, core_ids: set[int]
-    ) -> tuple[dict[int, object | None], dict[int, list]]:
+        db: AsyncSession, core_ids: set[int], *, lazy: bool = False
+    ) -> tuple[dict[int, object | None], dict[int, CoreUsers]]:
         if not core_ids:
             return {}, {}
 
         resolved_cores = await core_manager.get_cores(core_ids | {1})
         default_core = resolved_cores.get(1)
         cores_by_id: dict[int, object | None] = {}
-        users_by_core: dict[int, list] = {}
+        users_by_core: dict[int, CoreUsers] = {}
+        loaded_users: dict[int, list] = {}
+        load_lock = asyncio.Lock()
+
+        def user_loader(core_id, core):
+            async def load():
+                # Bulk connects share one session. Serialize first reads and reuse
+                # the same snapshot for nodes that actually need a Start RPC.
+                async with load_lock:
+                    if core_id not in loaded_users:
+                        loaded_users[core_id] = await core_users(
+                            db=db, inbound_tags=core.inbounds, allowed_protocols=core.protocols
+                        )
+                    return loaded_users[core_id]
+
+            return load
 
         for core_id in core_ids:
             core = resolved_cores.get(core_id) or default_core
@@ -246,13 +286,16 @@ class NodeOperation(BaseOperation):
                 users_by_core[core_id] = []
                 continue
 
-            users_by_core[core_id] = await core_users(
-                db=db,
-                inbound_tags=core.inbounds,
-                allowed_protocols=core.protocols,
-            )
+            load = user_loader(core_id, core)
+            users_by_core[core_id] = load if lazy else await load()
 
         return cores_by_id, users_by_core
+
+    @staticmethod
+    async def _resume_shared_sync(pg_node: PasarGuardNode):
+        if needs_shared_bridge_memory():
+            pg_node._work_available.set()
+            await pg_node._ensure_sync_worker_running()
 
     @staticmethod
     async def _attach_if_running(pg_node: PasarGuardNode, node_name: str):
@@ -270,7 +313,17 @@ class NodeOperation(BaseOperation):
             if info is None or not info.started or not info.node_version or not info.core_version:
                 return None
 
+            # The running flag can outlive a missing WireGuard interface. Confirm
+            # a broken backend has recovered before marking the attachment healthy.
+            if await pg_node.get_health() is Health.BROKEN or (
+                state is not None and state.observed is LifecycleStatus.BROKEN
+            ):
+                await pg_node.get_backend_stats()
+
             await pg_node.connect(info.node_version, info.core_version)
+            # Shared pending work survives a panel restart. Attaching must
+            # wake the lazy bridge worker even without a fresh user update.
+            await NodeOperation._resume_shared_sync(pg_node)
             if state is not None:
                 await pg_node.update_observed_lifecycle(LifecycleStatus.HEALTHY, expected_epoch=state.epoch)
             logger.debug(
@@ -283,7 +336,7 @@ class NodeOperation(BaseOperation):
 
     @staticmethod
     async def _start_or_attach_node(
-        pg_node: PasarGuardNode, db_node: Node, core, users: list, backend_type, *, force_start: bool = False
+        pg_node: PasarGuardNode, db_node: Node, core, users: CoreUsers, backend_type, *, force_start: bool = False
     ):
         if not force_start:
             state = await pg_node.get_lifecycle_state()
@@ -300,34 +353,96 @@ class NodeOperation(BaseOperation):
                     # Skip; the next retry cycle will check again once it's done.
                     return
 
-        start_kwargs = {
-            "config": core.to_str(),
-            "backend_type": backend_type,
-            "users": users,
-            "keep_alive": db_node.keep_alive,
-        }
-        if core.type == CoreType.xray:
-            start_kwargs["exclude_inbounds"] = core.exclude_inbound_tags
+        # Healthy attachments and in-flight starts do not need a user snapshot.
+        # Resolve it only when the remote backend really needs to be started,
+        # inside the node's full-sync fence: Start replaces the core's user set
+        # with this snapshot, so deltas must not land between the read and it.
+        fence = getattr(pg_node, "full_sync_fence", None)
+        async with fence() if callable(fence) else contextlib.nullcontext() as held:
+            if callable(users):
+                users = await users()
+            if held is not None:
+                held.check()
+            batch_wireguard_users = (
+                backend_type == service.BackendType.WIREGUARD and len(users) >= WIREGUARD_BATCHED_START_THRESHOLD
+            )
+            start_kwargs = {
+                "config": core.to_str(),
+                "backend_type": backend_type,
+                # Starting WireGuard with thousands of peers makes the lifecycle RPC
+                # exceed its short timeout. Bring up the interface first, then apply
+                # peers through the node's bounded delta-sync path below.
+                "users": [] if batch_wireguard_users else users,
+                "keep_alive": db_node.keep_alive,
+            }
+            if core.type == CoreType.xray:
+                start_kwargs["exclude_inbounds"] = core.exclude_inbound_tags
 
-        if force_start:
-            try:
-                await pg_node.stop()
-            except Exception as exc:
-                logger.debug(f'Stop before force start of "{db_node.name}" skipped: {exc}')
+            if force_start:
+                try:
+                    await pg_node.stop()
+                except Exception as exc:
+                    logger.debug(f'Stop before force start of "{db_node.name}" skipped: {exc}')
 
-        log = logger.info if force_start else logger.debug
-        log(f'Starting "{db_node.name}" node')
-        return await pg_node.start(**start_kwargs)
+            log = logger.info if force_start else logger.debug
+            log(f'Starting "{db_node.name}" node')
+            if batch_wireguard_users:
+                try:
+                    info = await pg_node.start(**start_kwargs)
+                except asyncio.CancelledError:
+                    await NodeOperation._cleanup_cancelled_batched_start(db_node.id, pg_node)
+                    raise
+            else:
+                info = await pg_node.start(**start_kwargs)
+            if batch_wireguard_users:
+                try:
+                    synced_node = await node_manager.sync_users_batched(
+                        db_node.id, pg_node, users, batch_size=WIREGUARD_START_BATCH_SIZE
+                    )
+                    if synced_node is None:
+                        raise RuntimeError("node connection changed during initial user sync")
+                    if held is not None:
+                        held.check()
+                except asyncio.CancelledError:
+                    await NodeOperation._cleanup_cancelled_batched_start(db_node.id, pg_node)
+                    raise
+                except UserSyncPreemptedError as exc:
+                    # A connection change or removal of the node won. That operation decides
+                    # whether the old backend is stopped and reconnects the node itself, so this
+                    # start neither stops it nor reports an error (-4 makes connect_node skip).
+                    raise NodeAPIError(-4, str(exc)) from exc
+                except Exception as exc:
+                    try:
+                        await node_manager.stop_node_if_current(db_node.id, pg_node)
+                    except Exception:
+                        pass
+                    raise NodeAPIError(500, f"Failed to sync users after starting WireGuard: {exc}") from exc
+            return info
 
     @staticmethod
-    async def connect_node(db_node: Node, core, users: list, *, force_start: bool = False) -> dict | None:
+    async def _cleanup_cancelled_batched_start(node_id: int, pg_node: PasarGuardNode) -> None:
+        cleanup_task = asyncio.create_task(node_manager.stop_node_if_current(node_id, pg_node))
+        try:
+            await asyncio.shield(cleanup_task)
+        except asyncio.CancelledError:
+            # Keep waiting if shutdown requests cancellation again while the
+            # backend is being returned to a consistent stopped state.
+            try:
+                await cleanup_task
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    @staticmethod
+    async def connect_node(db_node: Node, core, users: CoreUsers, *, force_start: bool = False) -> dict | None:
         """
         Connect to a node and return status result (does NOT update database).
 
         Args:
             db_node (Node): Node object from database.
             core: Pre-fetched core config for this node.
-            users (list): Pre-fetched core users list.
+            users: Core users or a deferred snapshot loader, used only for Start.
             force_start: If True, push a new Start RPC even when the core is already running.
 
         Returns:
@@ -469,6 +584,11 @@ class NodeOperation(BaseOperation):
         if modified_node.core_config_id is not None:
             await self.get_validated_core_config(db, modified_node.core_config_id)
 
+        updates = modified_node.model_dump(exclude_none=True)
+        force_start = any(
+            field in updates and updates[field] != getattr(db_node, field) for field in NODE_RESTART_FIELDS
+        )
+
         try:
             db_node = await modify_node(db, db_node, modified_node)
         except IntegrityError:
@@ -479,9 +599,7 @@ class NodeOperation(BaseOperation):
         else:
             try:
                 await self._update_node_impl(db_node)
-                # force_start=True ensures the node always receives the updated config
-                # (e.g. core_config_id, usage_coefficient) even when already healthy.
-                asyncio.create_task(self._connect_single_node_background(db_node.id, force_start=True))
+                asyncio.create_task(self._connect_single_node_background(db_node.id, force_start=force_start))
             except NodeAPIError as e:
                 await self._update_single_node_status(db, db_node.id, NodeStatus.error, message=e.detail)
 
@@ -556,7 +674,9 @@ class NodeOperation(BaseOperation):
         """
         await self._connect_bulk_impl(db, nodes, force_start=force_start)
 
-    async def connect_single_node(self, db: AsyncSession, node_id: int, *, force_start: bool = False) -> None:
+    async def connect_single_node(
+        self, db: AsyncSession, node_id: int, *, force_start: bool = False, health_check: bool = False
+    ) -> None:
         """
         Connect a single node and update its status (optimized for single-node operations).
 
@@ -567,7 +687,10 @@ class NodeOperation(BaseOperation):
             db (AsyncSession): Database session.
             node_id (int): ID of the node to connect.
             force_start: Push a new Start RPC (admin restart / core apply).
+            health_check: Defer automatic recovery status until probes confirm it.
         """
+        if health_check:
+            return await self.recover_node(db, node_id)
         return await self._connect_single_impl(db, node_id, force_start=force_start)
 
     async def disconnect_single_node(self, node_id: int) -> None:
@@ -666,12 +789,6 @@ class NodeOperation(BaseOperation):
     async def get_user_ip_list_all_nodes(self, db: AsyncSession, user_id: int) -> UserIPListAll:
         return await self._get_user_ip_list_all_impl(db, user_id)
 
-    async def get_users_online_ips(self, node_ids: list[int] | None = None) -> tuple[dict[int, dict[str, int]], int]:
-        return await self._get_users_online_ips(node_ids)
-
-    async def get_users_ip_ranking(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
-        return await self._get_users_ip_ranking_impl(db, query)
-
     async def _get_node_user_ip_list_safe(self, node_id: int, email: str) -> dict[str, int] | None:
         """Wrapper method that returns None instead of raising exceptions"""
         try:
@@ -687,42 +804,6 @@ class NodeOperation(BaseOperation):
         except NodeAPIError as e:
             if e.code != 404:
                 logger.error(f"Error getting IP list for user {email} on node {node_id}: {e}")
-            return None
-
-    async def _get_node_users_ip_list_bulk_safe(self, node_id: int) -> dict[str, dict[str, int]] | None:
-        """Bulk per-node online-IP fetch, keyed by user email.
-
-        GetUsersOnlineIpListStats has no wrapper in the published
-        pasarguard-node-bridge yet, so this calls the low-level gRPC stub
-        directly (bypassing PasarGuardNode's hand-written per-user method).
-        Only grpclib-transport nodes expose that stub; REST-transport nodes
-        return None here and are simply skipped by callers.
-
-        TODO(bridge): remove this and call the real wrapper once
-        pasarguard-node-bridge publishes GetUsersOnlineIpListStats. The
-        matching local stub regeneration lives in
-        scripts/regenerate_node_bridge_proto.py -- remove that too.
-        """
-        try:
-            node = await node_manager.get_node(node_id)
-            if node is None:
-                return None
-
-            client = getattr(node, "_client", None)
-            handle_request = getattr(node, "_handle_grpc_request", None)
-            if client is None or handle_request is None or not hasattr(client, "GetUsersOnlineIpListStats"):
-                return None
-
-            response = await handle_request(method=client.GetUsersOnlineIpListStats, request=service.Empty())
-            if response is None:
-                return None
-
-            return {email: dict(stats.ips) for email, stats in response.users.items()}
-        except NodeAPIError as e:
-            # 404: node not found; 501: node predates this RPC (old node binary) --
-            # both mean "skip this node", not an error worth logging.
-            if e.code not in (404, 501):
-                logger.error(f"Error getting bulk IP list for node {node_id}: {e}")
             return None
 
     async def sync_node_users(self, db: AsyncSession, node_id: int, flush_users: bool = False) -> NodeResponse:
@@ -778,7 +859,7 @@ class NodeOperation(BaseOperation):
             return
 
         core_ids = {node.core_config_id or 1 for node in nodes}
-        cores_by_id, users_by_core = await self._get_core_users_map(db, core_ids)
+        cores_by_id, users_by_core = await self._get_core_users_map(db, core_ids, lazy=True)
         sem = asyncio.Semaphore(CONNECT_CONCURRENCY)
 
         async def connect_single(node: Node) -> dict | None:
@@ -859,13 +940,23 @@ class NodeOperation(BaseOperation):
             {"node_ids": [node.id for node in nodes], "force_start": force_start},
         )
 
-    async def _connect_single_node_local(self, db: AsyncSession, node_id: int, *, force_start: bool = False) -> None:
+    async def recover_node(self, db: AsyncSession, node_id: int) -> None:
+        """Repair a node, leaving status/notifications to consecutive health probes."""
+        if (
+            await self._connect_single_node_local(db, node_id, defer_health_status=True)
+            and needs_shared_bridge_memory()
+        ):
+            await publish_node_sync("connect", node_id)
+
+    async def _connect_single_node_local(
+        self, db: AsyncSession, node_id: int, *, force_start: bool = False, defer_health_status: bool = False
+    ) -> bool:
         db_node = await get_node_by_id(db, node_id, load_usage_logs=False)
         if db_node is None or db_node.status in (NodeStatus.disabled, NodeStatus.limited):
-            return
+            return False
 
         core_id = db_node.core_config_id or 1
-        cores_by_id, users_by_core = await self._get_core_users_map(db, {core_id})
+        cores_by_id, users_by_core = await self._get_core_users_map(db, {core_id}, lazy=True)
         core = cores_by_id.get(core_id)
         users = users_by_core.get(core_id, [])
 
@@ -874,6 +965,9 @@ class NodeOperation(BaseOperation):
         try:
             await node_manager.update_node(db_node)
         except NodeAPIError as e:
+            if defer_health_status:
+                logger.warning("Node recovery failed for %s: %s", node_id, e.detail)
+                return False
             # Update status to error using simple CRUD
             await update_node_status(
                 db=db,
@@ -889,13 +983,17 @@ class NodeOperation(BaseOperation):
                     message=e.detail,
                 )
                 asyncio.create_task(notification.error_node(node_notif))
-            return
+            return False
 
         # Connect the node
         result = await NodeOperation.connect_node(db_node, core, users, force_start=force_start)
 
         if not result:
-            return
+            return False
+        if defer_health_status:
+            # A successful Start/attach is not yet a sustained health recovery.
+            # A failed repair must not bypass the health failure threshold either.
+            return result["status"] == NodeStatus.connected
 
         # Update status using simple CRUD (NOT bulk!)
         await update_node_status(
@@ -924,9 +1022,11 @@ class NodeOperation(BaseOperation):
             )
             asyncio.create_task(notification.error_node(node_notif))
 
+        return True
+
     async def _connect_single_node_sync(self, db: AsyncSession, node_id: int, *, force_start: bool = False) -> None:
-        await self._connect_single_node_local(db, node_id, force_start=force_start)
-        await publish_node_sync("connect", node_id)
+        if await self._connect_single_node_local(db, node_id, force_start=force_start):
+            await publish_node_sync("connect", node_id)
 
     async def _connect_single_node_remote(self, db: AsyncSession, node_id: int, *, force_start: bool = False) -> None:
         await node_nats_client.publish("connect_node", {"node_id": node_id, "force_start": force_start})
@@ -1138,109 +1238,6 @@ class NodeOperation(BaseOperation):
         except RuntimeError as exc:
             await self.handle_rpc_error(exc)
 
-    async def _get_users_online_ips(self, node_ids: list[int] | None = None) -> tuple[dict[int, dict[str, int]], int]:
-        """Online IPs per user (ip -> last-seen unix timestamp), unioned across healthy nodes.
-
-        Used to rank users by concurrent-device/IP count (e.g. to spot
-        credential sharing). Nodes that don't support the bulk RPC yet
-        (REST-transport, or an older node binary) are skipped rather than
-        failing the whole ranking -- see _get_node_users_ip_list_bulk_safe.
-        If node_ids is given, only those nodes are queried.
-
-        Returns (ips_by_user, skipped_node_count) -- the caller surfaces the
-        skip count so an admin isn't misled by a ranking that's silently
-        missing data from nodes that couldn't be queried.
-        """
-        nodes = await node_manager.get_healthy_nodes()
-        if node_ids is not None:
-            wanted = set(node_ids)
-            nodes = [(node_id, node) for node_id, node in nodes if node_id in wanted]
-        ip_tasks = {
-            node_id: asyncio.create_task(self._get_node_users_ip_list_bulk_safe(node_id)) for node_id, _ in nodes
-        }
-        await asyncio.gather(*ip_tasks.values(), return_exceptions=True)
-
-        ips_by_user: dict[int, dict[str, int]] = {}
-        skipped_node_count = 0
-        for node_id, task in ip_tasks.items():
-            if task.exception():
-                logger.error(f"Error getting bulk IP list for node {node_id}: {task.exception()}")
-                skipped_node_count += 1
-                continue
-            node_result = task.result()
-            if node_result is None:
-                skipped_node_count += 1
-                continue
-            for email, ips in node_result.items():
-                try:
-                    user_id = int(email)
-                except ValueError:
-                    continue
-                user_ips = ips_by_user.setdefault(user_id, {})
-                for ip, last_seen in ips.items():
-                    if last_seen > user_ips.get(ip, 0):
-                        user_ips[ip] = last_seen
-
-        return ips_by_user, skipped_node_count
-
-    async def _resolve_ip_ranking(
-        self,
-        db: AsyncSession,
-        ips_by_user: dict[int, dict[str, int]],
-        updated_at,
-        query: UserIPRankingQuery,
-        skipped_node_count: int = 0,
-    ) -> UserIPRankingList:
-        counts = {
-            user_id: len(ips)
-            for user_id, ips in ips_by_user.items()
-            if (query.ip_count_min is None or len(ips) >= query.ip_count_min)
-            and (query.ip_count_max is None or len(ips) <= query.ip_count_max)
-        }
-
-        ranked_ids = sorted(counts, key=lambda user_id: counts[user_id], reverse=True)
-        status = [query.status] if isinstance(query.status, UserStatus) else query.status
-        users = await get_users(
-            db, UserListQuery(ids=ranked_ids, admin_ids=query.admin_ids, group_ids=query.group_ids, status=status)
-        )
-        users_by_id = {user.id: user for user in users}
-
-        visible_ids = [user_id for user_id in ranked_ids if user_id in users_by_id]
-        offset = query.offset or 0
-        limit = query.limit if query.limit is not None else len(visible_ids)
-        page_ids = visible_ids[offset : offset + limit]
-
-        entries = [
-            UserIPRankingEntry(
-                user_id=user_id,
-                username=users_by_id[user_id].username,
-                ips=ips_by_user[user_id],
-                distinct_ip_count=counts[user_id],
-                used_traffic=users_by_id[user_id].used_traffic,
-            )
-            for user_id in page_ids
-        ]
-
-        return UserIPRankingList(
-            users=entries, updated_at=updated_at, total=len(visible_ids), skipped_node_count=skipped_node_count
-        )
-
-    async def _get_users_ip_ranking_local(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
-        ips_by_user, skipped_node_count = await self._get_users_online_ips(query.node_ids)
-        return await self._resolve_ip_ranking(db, ips_by_user, datetime.now(UTC), query, skipped_node_count)
-
-    async def _get_users_ip_ranking_remote(self, db: AsyncSession, query: UserIPRankingQuery) -> UserIPRankingList:
-        try:
-            data = await node_nats_client.request("get_users_ip_ranking", {"node_ids": query.node_ids})
-        except RuntimeError as exc:
-            await self.handle_rpc_error(exc)
-            return
-
-        snapshot = UserOnlineIPsSnapshot.model_validate(data)
-        return await self._resolve_ip_ranking(
-            db, snapshot.users, snapshot.computed_at, query, snapshot.skipped_node_count
-        )
-
     async def _sync_node_users_local(self, db: AsyncSession, node_id: int, flush_users: bool) -> NodeResponse:
         db_node = await self.get_validated_node(db, node_id=node_id)
 
@@ -1253,10 +1250,20 @@ class NodeOperation(BaseOperation):
 
         try:
             core_id = db_node.core_config_id or 1
-            _, users_by_core = await self._get_core_users_map(db, {core_id})
+            # Defer the snapshot read: sync_full takes it inside the node's
+            # fence, after any queued deltas were drained, so nothing created
+            # between the read and the flush can be lost.
+            _, users_by_core = await self._get_core_users_map(db, {core_id}, lazy=True)
             users = users_by_core.get(core_id, [])
             if await node_manager.sync_full(node_id, users, flush_pending=flush_users) is None:
                 await self.raise_error(message="Node is not connected", code=409)
+        except UserSyncPreemptedError:
+            # An edit of the node's connection or its removal won; this is not a node fault,
+            # so the node status is left alone and the admin can simply retry.
+            await self.raise_error(
+                message="User sync was interrupted by a change to the node's connection or its removal, retry",
+                code=409,
+            )
         except NodeAPIError as e:
             await update_node_status(db=db, db_node=db_node, status=NodeStatus.error, message=e.detail)
             await self.raise_error(message=e.detail, code=e.code)
@@ -1282,7 +1289,9 @@ class NodeOperation(BaseOperation):
 
     async def _update_node_api_remote(self, node_id: int) -> dict:
         try:
-            return await node_nats_client.request("update_node_api", {"node_id": node_id})
+            return await node_nats_client.request(
+                "update_node_api", {"node_id": node_id}, timeout=_MAINTENANCE_RPC_TIMEOUT
+            )
         except RuntimeError as exc:
             await self.handle_rpc_error(exc)
 
@@ -1300,6 +1309,7 @@ class NodeOperation(BaseOperation):
         return await node_nats_client.request(
             "update_core",
             {"node_id": node_id, "core_update": node_core_update.model_dump(mode="json")},
+            timeout=_MAINTENANCE_RPC_TIMEOUT,
         )
 
     async def _update_geofiles_local(self, node_id: int, node_geofiles_update: NodeGeoFilesUpdate) -> dict:
@@ -1316,6 +1326,7 @@ class NodeOperation(BaseOperation):
         return await node_nats_client.request(
             "update_geofiles",
             {"node_id": node_id, "geofiles_update": node_geofiles_update.model_dump(mode="json")},
+            timeout=_MAINTENANCE_RPC_TIMEOUT,
         )
 
     async def bulk_remove_nodes(

@@ -91,12 +91,8 @@ run-cli:
 
 # Run tests
 .PHONY: test
-test: regenerate-node-bridge-proto
+test:
 	@uv run pytest tests/
-
-.PHONY: regenerate-node-bridge-proto
-regenerate-node-bridge-proto:
-	@uv run python scripts/regenerate_node_bridge_proto.py
 
 # Run tests-watch
 .PHONY: test-whatch

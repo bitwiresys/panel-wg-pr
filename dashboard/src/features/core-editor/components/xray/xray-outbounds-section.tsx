@@ -1068,7 +1068,7 @@ export function XrayOutboundsSection({ headerAddPulse, headerAddEpoch }: XrayOut
                                 field.onChange(v)
                                 const protocol = v === 'direct' ? 'freedom' : v === 'block' ? 'blackhole' : (v as 'dns' | (typeof proxyProtocols)[number])
                                 const isSimpleEnvelope = protocol === 'freedom' || protocol === 'blackhole' || protocol === 'dns'
-                                let created = stripSparseOutboundEnvelope(
+                                const created = stripSparseOutboundEnvelope(
                                   createDefaultOutbound({
                                     protocol: protocol as 'freedom' | 'blackhole' | 'dns' | (typeof proxyProtocols)[number],
                                     tag: ob.tag,
@@ -1082,13 +1082,6 @@ export function XrayOutboundsSection({ headerAddPulse, headerAddEpoch }: XrayOut
                                       : {}),
                                   }) as Record<string, unknown>,
                                 ) as Outbound
-                                if (protocol === 'hysteria') {
-                                  // Kit's default hysteria outbound settings are `{}` — Xray requires `version: 2` there, so seed it up front.
-                                  created = {
-                                    ...created,
-                                    settings: normalizeSettingsFromEditor('hysteria', (created as { settings?: Record<string, unknown> }).settings ?? {}),
-                                  } as Outbound
-                                }
                                 patchOutbound(created)
                                 setSettingsFormSeed(s => s + 1)
                                 form.reset(buildOutboundDetailFormValues(created, outboundCapsRef.current))
