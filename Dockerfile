@@ -19,6 +19,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 ADD . /build
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python .venv/bin/python --no-deps grpcio-tools \
+    && .venv/bin/python scripts/regenerate_node_bridge_proto.py \
+    && uv pip uninstall --python .venv/bin/python grpcio-tools
 
 
 FROM python:$PYTHON_VERSION-slim-bookworm

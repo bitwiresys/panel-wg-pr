@@ -245,18 +245,28 @@ class UserSimpleSortOption(str, Enum):
         return SortDirection.desc if self.value.startswith("-") else SortDirection.asc
 
 
-class UserListQuery(BaseModel):
+class PaginatedAdminGroupStatusQuery(BaseModel):
+    """Shared offset/limit/admin/group/status filters for endpoints that list
+    or rank users. Kept separate from UserListQuery's other filters so it can
+    be reused as-is by narrower query models (e.g. UserIPRankingQuery)
+    without pulling in fields (search, sort, expire ranges, ...) that don't
+    apply there."""
+
     offset: int | None = Field(default=None)
     limit: int | None = Field(default=None)
+    admin_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("admin_ids", "admin_id"))
+    group_ids: list[int] | None = Field(default=None, alias="group")
+    status: UserStatus | list[UserStatus] | None = Field(default=None)
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class UserListQuery(PaginatedAdminGroupStatusQuery):
     ids: list[int] | None = Field(default=None)
     username: list[str] | None = Field(default=None)
     usernames: list[str] | None = Field(default=None)
     owner: list[str] | None = Field(default=None, alias="admin")
-    admin_ids: list[int] | None = Field(default=None, validation_alias=AliasChoices("admin_ids", "admin_id"))
-    group_ids: list[int] | None = Field(default=None, alias="group")
     no_group: bool = Field(default=False)
     search: str | None = Field(default=None)
-    status: UserStatus | list[UserStatus] | None = Field(default=None)
     sort: list[UserSortOption] = Field(default_factory=list)
     proxy_id: str | None = Field(default=None)
     data_limit_reset_strategy: DataLimitResetStrategy | list[DataLimitResetStrategy] | None = Field(
@@ -272,7 +282,6 @@ class UserListQuery(BaseModel):
     no_data_limit: bool = Field(default=False)
     no_expire: bool = Field(default=False)
     load_sub: bool = Field(default=False)
-    model_config = ConfigDict(populate_by_name=True)
 
     @field_validator("sort", mode="before")
     @classmethod
