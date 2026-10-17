@@ -3,6 +3,7 @@ import zipfile
 
 from app.models.subscription import SubscriptionInboundData
 
+from .amnezia import AMNEZIA_CONF_KEYS
 from .base import BaseSubscription
 
 
@@ -23,6 +24,12 @@ class WireGuardConfiguration(BaseSubscription):
         return "\n".join(output).strip()
 
     def add(self, remark: str, address: str, inbound: SubscriptionInboundData, settings: dict):
+        """Append a WireGuard configuration for a client endpoint.
+
+        Do nothing if the client private key, peer IPs, or server public key is
+        missing. AmneziaWG values other than None become Interface directives.
+        A missing allowed IPs value raises KeyError when building the Peer section.
+        """
         components = self._build_wireguard_components(remark, address, inbound, settings)
         if not components:
             return
@@ -52,6 +59,10 @@ class WireGuardConfiguration(BaseSubscription):
                 config_data["Interface"]["DNS"] = dns_servers.replace(",", ", ")
             else:
                 config_data["Interface"]["DNS"] = ", ".join(dns_servers)
+
+        for key, conf_key in AMNEZIA_CONF_KEYS.items():
+            if key in payload:
+                config_data["Interface"][conf_key] = str(payload[key])
 
         # Optional Peer settings
         if preshared_key := payload.get("presharedkey"):

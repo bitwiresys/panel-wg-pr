@@ -7,18 +7,16 @@ from typing import Any, Literal
 from urllib.parse import quote, urlencode
 
 from app.models.subscription import SubscriptionInboundData
+from app.subscription.amnezia import resolve_amnezia_settings
 
 
 def normalize_and_remove_none_values(data: dict) -> dict:
-    """
-    Clean dictionary by removing None, empty strings, and 0 values.
-    Converts Enum values and recursively cleans nested dictionaries and lists.
+    """Remove empty dictionary values recursively while preserving ``False``.
 
-    Args:
-        data: Input dictionary to clean
-
-    Returns:
-        Cleaned dictionary with empty values removed
+    Dictionary entries with None, empty strings, zero, or empty lists are
+    omitted; empty nested dictionaries are omitted too. Lists lose None and
+    empty strings but retain zero and False. Enum values become their values.
+    Non-dictionary input is returned unchanged.
     """
     if not isinstance(data, dict):
         return data
@@ -41,7 +39,7 @@ def normalize_and_remove_none_values(data: dict) -> dict:
     def clean_dict(d: dict) -> dict:
         new_dict = {}
         for k, v in d.items():
-            if v not in (None, "", 0, []):
+            if v is False or (v not in (None, "", 0, [])):
                 if isinstance(v, dict):
                     if cleaned_dict := clean_dict(v):
                         new_dict[k] = cleaned_dict
@@ -219,6 +217,15 @@ class BaseSubscription:
     def _build_wireguard_components(
         self, remark: str, address: str, inbound: SubscriptionInboundData, settings: dict
     ) -> dict | None:
+        """Build the shared WireGuard payload and link for one client endpoint.
+
+        Return None when the client private key, peer IPs, or server public key
+        is absent. Otherwise return the payload, URI, client private key, peer
+        IPs, and a unique remark; the remark is also reserved in
+        ``proxy_remarks``. AmneziaWG values are normalized with the other
+        payload fields, so None, empty strings, and zero are omitted while
+        False is retained.
+        """
         private_key = settings.get("private_key", "")
         peer_ips = list(settings.get("peer_ips") or [])
         public_key = inbound.wireguard_public_key
@@ -247,6 +254,7 @@ class BaseSubscription:
             payload["presharedkey"] = inbound.wireguard_pre_shared_key
         if inbound.finalmask_link:
             payload["fm"] = inbound.finalmask_link
+        payload.update(resolve_amnezia_settings(inbound.wireguard_amnezia, inbound.finalmask))
 
         payload = self._normalize_and_remove_none_values(payload)
         uri_payload = dict(payload)

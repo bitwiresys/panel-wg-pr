@@ -1488,6 +1488,7 @@
       "duplicateNoise": "Duplicate Noise"
     },
     "fragmentNoiseDeprecated": "`noise` and `fragment` are being removed in newer versions — use `finalMask` instead.",
+    "amneziawgServerOnly": "S/H/HeaderProtectionKey/RandomTrailers work only with an AmneziaWG server; do not set them for an Xray WireGuard inbound.",
     "finalmask": {
       "title": "FinalMask Settings",
       "enable": "Enable FinalMask",

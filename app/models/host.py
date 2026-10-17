@@ -17,6 +17,7 @@ from pydantic import (
 from app.db.models import HostPlatform, ProxyHostALPN, ProxyHostFingerprint, ProxyHostSecurity, UserStatus
 from app.utils.helpers import has_markup_unsafe_chars
 
+from .amnezia import AmneziaProperties
 from .validators import ListValidator, StringArrayValidator
 
 
@@ -816,6 +817,7 @@ class BaseHost(BaseModel):
     subscription_templates: SubscriptionTemplates | None = Field(None)
     final_mask_settings: FinalMask | None = Field(None)
     cipher_suites: str | None = Field(None)
+    wireguard_amnezia: AmneziaProperties | None = Field(None)
 
     model_config = ConfigDict(from_attributes=True)
 

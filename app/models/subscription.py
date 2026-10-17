@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, computed_field, field_validator
 
+from app.models.amnezia import AmneziaProperties
 from app.models.host import FinalMask
 from app.models.stats import Period
 
@@ -314,6 +315,7 @@ class SubscriptionInboundData(BaseModel):
     noise_settings: dict[str, Any] | None = Field(None)
     finalmask: dict[str, Any] | None = Field(None)
     finalmask_link: str | None = Field(None)
+    wireguard_amnezia: AmneziaProperties | None = Field(None)
 
     # Priority and status
     priority: int = Field(0)
